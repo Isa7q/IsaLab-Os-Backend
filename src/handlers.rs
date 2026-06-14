@@ -895,7 +895,9 @@ pub async fn get_npm_hosts(State(state): State<Arc<AppState>>) -> axum::response
         Err(_) => return get_npm_hosts_fallback(&state.db).await,
     };
 
-    let token_url = format!("http://{}:81/api/tokens", local_ip);
+    let npm_api_host = get_npm_api_host(&local_ip).await;
+
+    let token_url = format!("http://{}:81/api/tokens", npm_api_host);
     let token_payload = serde_json::json!({
         "identity": npm_email,
         "secret": npm_password
@@ -915,7 +917,7 @@ pub async fn get_npm_hosts(State(state): State<Arc<AppState>>) -> axum::response
         _ => return get_npm_hosts_fallback(&state.db).await,
     };
 
-    let list_url = format!("http://{}:81/api/nginx/proxy-hosts", local_ip);
+    let list_url = format!("http://{}:81/api/nginx/proxy-hosts", npm_api_host);
     let list_res = client.get(&list_url).header("Authorization", format!("Bearer {}", token)).send().await;
 
     match list_res {
@@ -1023,8 +1025,9 @@ pub async fn post_npm_hosts(
 
     // Se estiver configurado, tenta criar no NPM físico de verdade
     let id = if local_ip != "127.0.0.1" && !npm_password.is_empty() {
+        let npm_api_host = get_npm_api_host(&local_ip).await;
         match npm::create_proxy_host(
-            &local_ip,
+            &npm_api_host,
             81,
             &npm_email,
             &npm_password,
@@ -1136,10 +1139,10 @@ pub async fn post_toggle_npm_ssl(
 
 // 12. GET /api/dns-entries
 pub async fn get_dns_entries(State(state): State<Arc<AppState>>) -> axum::response::Response {
-    let pihole_path = match get_config_val(&state.db, "pihole_path").await {
-        Some(p) if !p.is_empty() => p,
-        _ => return get_dns_entries_fallback(&state.db).await,
-    };
+    let pihole_path = get_pihole_config_path(&state.db).await;
+    if pihole_path.is_empty() {
+        return get_dns_entries_fallback(&state.db).await;
+    }
 
     let path = std::path::Path::new(&pihole_path);
     if !path.exists() {
@@ -1257,20 +1260,15 @@ pub async fn post_dns_entries(
     }
 
     // Salvar no pihole.toml em background
-    let pihole_path_res = sqlx::query("SELECT value FROM system_config WHERE key = 'pihole_path'")
-        .fetch_optional(&state.db)
-        .await;
-    
-    if let Ok(Some(row)) = pihole_path_res {
-        let path = row.get::<String, _>(0);
+    let db_clone = state.db.clone();
+    let ip_clone = payload.ip.clone();
+    let domain_clone = payload.domain.clone();
+    tokio::spawn(async move {
+        let path = get_pihole_config_path(&db_clone).await;
         if !path.is_empty() {
-            let ip_clone = payload.ip.clone();
-            let domain_clone = payload.domain.clone();
-            tokio::spawn(async move {
-                let _ = pihole::add_dns_host(&path, &ip_clone, &domain_clone).await;
-            });
+            let _ = pihole::add_dns_host(&path, &ip_clone, &domain_clone).await;
         }
-    }
+    });
 
     let new_entry = DnsEntry {
         id,
@@ -1318,19 +1316,14 @@ pub async fn delete_dns_entry(
     let domain: String = entry.get("domain");
 
     // Remover do pihole.toml em background
-    let pihole_path_res = sqlx::query("SELECT value FROM system_config WHERE key = 'pihole_path'")
-        .fetch_optional(&state.db)
-        .await;
-    
-    if let Ok(Some(row)) = pihole_path_res {
-        let path = row.get::<String, _>(0);
+    let db_clone = state.db.clone();
+    let domain_clone = domain.clone();
+    tokio::spawn(async move {
+        let path = get_pihole_config_path(&db_clone).await;
         if !path.is_empty() {
-            let domain_clone = domain.clone();
-            tokio::spawn(async move {
-                let _ = pihole::remove_dns_host(&path, &domain_clone).await;
-            });
+            let _ = pihole::remove_dns_host(&path, &domain_clone).await;
         }
-    }
+    });
 
     let removed = DnsEntry {
         id: entry.get("id"),
@@ -1501,7 +1494,7 @@ async fn execute_pipeline_task(state: Arc<AppState>, pipeline_id: String, payloa
     
     // Obter IP local da governança e caminho do pihole
     let local_ip = get_config_val(&state.db, "local_ip").await.unwrap_or_else(|| "127.0.0.1".to_string());
-    let pihole_path = get_config_val(&state.db, "pihole_path").await.unwrap_or_else(|| "".to_string());
+    let pihole_path = get_pihole_config_path(&state.db).await;
     let npm_email = get_config_val(&state.db, "npm_email").await.unwrap_or_else(|| "admin@example.com".to_string());
     let mut npm_password = get_config_val(&state.db, "npm_password").await.unwrap_or_default();
     if npm_password.is_empty() {
@@ -1559,7 +1552,8 @@ async fn execute_pipeline_task(state: Arc<AppState>, pipeline_id: String, payloa
         wait(1200).await;
 
         // Auto-login do NPM e criação do proxy
-        match npm::create_proxy_host(&local_ip, 81, &npm_email, &npm_password, vec![payload.subdomain.clone()], "http", &payload.ip, payload.port, true).await {
+        let npm_api_host = get_npm_api_host(&local_ip).await;
+        match npm::create_proxy_host(&npm_api_host, 81, &npm_email, &npm_password, vec![payload.subdomain.clone()], "http", &payload.ip, payload.port, true).await {
             Ok(n_id) => {
                 add_log(&state.db, &pipeline_id, "success", &format!("Proxy Host criado no Nginx Proxy Manager com ID {}.", n_id), None).await;
                 add_log(&state.db, &pipeline_id, "info", "Iniciando desafio SSL Let's Encrypt para geração de chave criptografada de 4096-Bits...", None).await;
@@ -2027,6 +2021,25 @@ async fn get_config_val(db: &SqlitePool, key: &str) -> Option<String> {
         .ok()
         .flatten()
         .map(|r| r.get::<String, _>(0))
+}
+
+async fn get_npm_api_host(local_ip: &str) -> String {
+    if tokio::net::lookup_host("nginxproxymanager:81").await.is_ok() {
+        "nginxproxymanager".to_string()
+    } else {
+        local_ip.to_string()
+    }
+}
+
+async fn get_pihole_config_path(db: &SqlitePool) -> String {
+    let configured_path = get_config_val(db, "pihole_path").await.unwrap_or_default();
+    if !configured_path.is_empty() && std::path::Path::new(&configured_path).exists() {
+        configured_path
+    } else if std::path::Path::new("/etc/pihole/pihole.toml").exists() {
+        "/etc/pihole/pihole.toml".to_string()
+    } else {
+        configured_path
+    }
 }
 
 fn now_iso() -> String {
