@@ -1,5 +1,5 @@
 use axum::{
-    routing::{get, post, put, delete},
+    routing::{get, post, put},
     Router,
 };
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
@@ -94,9 +94,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/containers", get(handlers::get_containers))
         .route("/containers/:id/toggle", post(handlers::post_toggle_container))
         .route("/npm-hosts", get(handlers::get_npm_hosts).post(handlers::post_npm_hosts))
+        .route("/npm-hosts/:id", put(handlers::put_npm_host).delete(handlers::delete_npm_host))
         .route("/npm-hosts/:id/toggle-ssl", post(handlers::post_toggle_npm_ssl))
         .route("/dns-entries", get(handlers::get_dns_entries).post(handlers::post_dns_entries))
-        .route("/dns-entries/:id", delete(handlers::delete_dns_entry))
+        .route("/dns-entries/:id", put(handlers::put_dns_entry).delete(handlers::delete_dns_entry))
+        .route("/config", get(handlers::get_config).put(handlers::put_config))
+        .route("/config/servers", post(handlers::post_server))
+        .route("/config/servers/:id", put(handlers::put_server).delete(handlers::delete_server))
+        .route("/config/servers/:id/activate", post(handlers::post_activate_server))
         .route("/pipelines", get(handlers::get_pipelines))
         .route("/pipelines/run", post(handlers::post_run_pipeline))
         .with_state(state);
@@ -133,6 +138,7 @@ async fn setup_extra_db_structures(pool: &SqlitePool) -> Result<(), Box<dyn std:
         "ALTER TABLE services ADD COLUMN docker_container_id TEXT;",
         "ALTER TABLE services ADD COLUMN npm_host_id TEXT;",
         "ALTER TABLE services ADD COLUMN dns_entry_id TEXT;",
+        "ALTER TABLE servers ADD COLUMN admin_password_hash TEXT;",
     ];
 
     for q in queries {
@@ -142,8 +148,56 @@ async fn setup_extra_db_structures(pool: &SqlitePool) -> Result<(), Box<dyn std:
     Ok(())
 }
 
-async fn seed_database_if_empty(_pool: &SqlitePool) -> Result<(), Box<dyn std::error::Error>> {
-    // Banco de dados em produção inicia vazio, sem dados mockados.
-    // As informações reais serão lidas e cadastradas dinamicamente pelas APIs do Docker, NPM e Pi-hole.
+async fn seed_database_if_empty(pool: &SqlitePool) -> Result<(), Box<dyn std::error::Error>> {
+    use sqlx::Row;
+    
+    // Verificar se a tabela servers está vazia
+    let servers_count: i32 = sqlx::query("SELECT COUNT(*) FROM servers")
+        .fetch_one(pool)
+        .await?
+        .get(0);
+
+    if servers_count == 0 {
+        // Tentar obter a configuração ativa de system_config
+        let local_ip_res = sqlx::query("SELECT value FROM system_config WHERE key = 'local_ip'")
+            .fetch_optional(pool)
+            .await;
+        
+        if let Ok(Some(row)) = local_ip_res {
+            let local_ip = row.get::<String, _>(0);
+            if !local_ip.is_empty() {
+                let pihole_path = sqlx::query("SELECT value FROM system_config WHERE key = 'pihole_path'")
+                    .fetch_optional(pool)
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|r| r.get::<String, _>(0))
+                    .unwrap_or_default();
+                let npm_email = sqlx::query("SELECT value FROM system_config WHERE key = 'npm_email'")
+                    .fetch_optional(pool)
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|r| r.get::<String, _>(0))
+                    .unwrap_or_else(|| "admin@example.com".to_string());
+                let npm_password = sqlx::query("SELECT value FROM system_config WHERE key = 'npm_password'")
+                    .fetch_optional(pool)
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|r| r.get::<String, _>(0))
+                    .unwrap_or_default();
+                
+                println!("[IsaLab] Migrando configuracoes ativas para o perfil de servidor padrao...");
+                let _ = sqlx::query("INSERT INTO servers (id, name, local_ip, pihole_path, npm_email, npm_password, active) VALUES ('default', 'Servidor Principal', ?, ?, ?, ?, 1)")
+                    .bind(local_ip)
+                    .bind(pihole_path)
+                    .bind(npm_email)
+                    .bind(npm_password)
+                    .execute(pool)
+                    .await;
+            }
+        }
+    }
     Ok(())
 }

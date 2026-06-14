@@ -79,6 +79,69 @@ pub struct DnsEntry {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
+pub struct ServerProfile {
+    pub id: String,
+    pub name: String,
+    pub local_ip: String,
+    pub pihole_path: String,
+    pub npm_email: Option<String>,
+    pub npm_password: Option<String>,
+    pub admin_password: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateConfigPayload {
+    pub local_ip: Option<String>,
+    pub pihole_path: Option<String>,
+    pub npm_email: Option<String>,
+    pub npm_password: Option<String>,
+    pub admin_password: Option<String>,
+    pub name: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateServerPayload {
+    pub name: String,
+    pub local_ip: String,
+    pub pihole_path: Option<String>,
+    pub npm_email: Option<String>,
+    pub npm_password: Option<String>,
+    pub admin_password: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateServerPayload {
+    pub name: Option<String>,
+    pub local_ip: Option<String>,
+    pub pihole_path: Option<String>,
+    pub npm_email: Option<String>,
+    pub npm_password: Option<String>,
+    pub admin_password: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateDnsEntryPayload {
+    pub ip: Option<String>,
+    pub domain: Option<String>,
+    pub source: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateNpmHostPayload {
+    pub domain_names: Option<Vec<String>>,
+    pub forward_scheme: Option<String>,
+    pub forward_host: Option<String>,
+    pub forward_port: Option<u16>,
+    pub ssl_active: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct PipelineLog {
     pub timestamp: String,
     pub level: String,
@@ -114,7 +177,10 @@ pub struct StatusResponse {
     pub onboarded: bool,
     pub local_ip: String,
     pub pihole_path: String,
-    pub has_npm_token: bool,
+    pub has_npm_email: bool,
+    pub has_npm_password: bool,
+    pub active_server_id: String,
+    pub servers: Vec<ServerProfile>,
 }
 
 pub async fn get_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -142,7 +208,7 @@ pub async fn get_status(State(state): State<Arc<AppState>>) -> impl IntoResponse
         _ => "".to_string(),
     };
 
-    let has_npm_token = match sqlx::query("SELECT value FROM system_config WHERE key = 'npm_token'")
+    let has_npm_email = match sqlx::query("SELECT value FROM system_config WHERE key = 'npm_email'")
         .fetch_optional(&state.db)
         .await
     {
@@ -150,11 +216,24 @@ pub async fn get_status(State(state): State<Arc<AppState>>) -> impl IntoResponse
         _ => false,
     };
 
+    let has_npm_password = match sqlx::query("SELECT value FROM system_config WHERE key = 'npm_password'")
+        .fetch_optional(&state.db)
+        .await
+    {
+        Ok(Some(row)) => !row.get::<String, _>(0).is_empty(),
+        _ => false,
+    };
+
+    let (servers, active_server_id) = get_servers_list(&state.db).await;
+
     Json(StatusResponse {
         onboarded,
         local_ip,
         pihole_path,
-        has_npm_token,
+        has_npm_email,
+        has_npm_password,
+        active_server_id,
+        servers,
     })
 }
 
@@ -230,7 +309,7 @@ pub async fn post_onboard(
 
     // Atualizar na tabela de usuários
     let res = sqlx::query("INSERT OR REPLACE INTO users (username, password_hash) VALUES ('admin', ?)")
-        .bind(password_hash)
+        .bind(&password_hash)
         .execute(&state.db)
         .await;
 
@@ -240,6 +319,16 @@ pub async fn post_onboard(
             Json(serde_json::json!({ "error": format!("Falha ao salvar usuário admin: {}", e) })),
         ).into_response();
     }
+
+    // Inserir ou atualizar na tabela servers o perfil padrão
+    let _ = sqlx::query("INSERT OR REPLACE INTO servers (id, name, local_ip, pihole_path, npm_email, npm_password, active, admin_password_hash) VALUES ('server-primary', 'Servidor Principal', ?, ?, ?, ?, 1, ?)")
+        .bind(&payload.local_ip)
+        .bind(&payload.pihole_path)
+        .bind(email)
+        .bind(password)
+        .bind(&password_hash)
+        .execute(&state.db)
+        .await;
 
     Json(SuccessMessage {
         success: true,
@@ -2136,4 +2225,777 @@ fn rand_flutuation() -> f64 {
 
 fn destructure_id() -> u128 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis()
+}
+
+// 16. GET /api/config
+pub async fn get_config(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let onboarded = get_config_val(&state.db, "onboarded").await.unwrap_or_default() == "true";
+    let local_ip = get_config_val(&state.db, "local_ip").await.unwrap_or_default();
+    let pihole_path = get_config_val(&state.db, "pihole_path").await.unwrap_or_default();
+    let npm_email = get_config_val(&state.db, "npm_email").await;
+    let npm_password = get_config_val(&state.db, "npm_password").await;
+
+    let (servers, active_server_id) = get_servers_list(&state.db).await;
+
+    Json(serde_json::json!({
+        "onboarded": onboarded,
+        "localIp": local_ip,
+        "piholePath": pihole_path,
+        "npmEmail": npm_email,
+        "npmPassword": npm_password,
+        "adminPassword": "",
+        "activeServerId": active_server_id,
+        "servers": servers
+    }))
+}
+
+// 17. PUT /api/config
+pub async fn put_config(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<UpdateConfigPayload>,
+) -> impl IntoResponse {
+    let (_, active_id) = get_servers_list(&state.db).await;
+
+    if let Some(ref ip) = payload.local_ip {
+        let _ = sqlx::query("INSERT OR REPLACE INTO system_config (key, value) VALUES ('local_ip', ?)")
+            .bind(ip).execute(&state.db).await;
+    }
+    if let Some(ref path) = payload.pihole_path {
+        let _ = sqlx::query("INSERT OR REPLACE INTO system_config (key, value) VALUES ('pihole_path', ?)")
+            .bind(path).execute(&state.db).await;
+    }
+    if let Some(ref email) = payload.npm_email {
+        let _ = sqlx::query("INSERT OR REPLACE INTO system_config (key, value) VALUES ('npm_email', ?)")
+            .bind(email).execute(&state.db).await;
+    }
+    if let Some(ref pwd) = payload.npm_password {
+        let _ = sqlx::query("INSERT OR REPLACE INTO system_config (key, value) VALUES ('npm_password', ?)")
+            .bind(pwd).execute(&state.db).await;
+        let _ = sqlx::query("INSERT OR REPLACE INTO system_config (key, value) VALUES ('npm_token', '')")
+            .execute(&state.db).await;
+    }
+
+    let mut password_hash_opt = None;
+    if let Some(ref admin_pwd) = payload.admin_password {
+        if !admin_pwd.is_empty() {
+            let salt_rounds = 12;
+            if let Ok(h) = bcrypt::hash(admin_pwd, salt_rounds) {
+                let _ = sqlx::query("INSERT OR REPLACE INTO users (username, password_hash) VALUES ('admin', ?)")
+                    .bind(&h).execute(&state.db).await;
+                password_hash_opt = Some(h);
+            }
+        }
+    }
+
+    let current_row = sqlx::query("SELECT name, local_ip, pihole_path, npm_email, npm_password, admin_password_hash FROM servers WHERE id = ?")
+        .bind(&active_id)
+        .fetch_optional(&state.db)
+        .await;
+
+    if let Ok(Some(row)) = current_row {
+        let name = payload.name.unwrap_or_else(|| row.get("name"));
+        let local_ip = payload.local_ip.unwrap_or_else(|| row.get("local_ip"));
+        let pihole_path = payload.pihole_path.unwrap_or_else(|| row.get("pihole_path"));
+        let npm_email = payload.npm_email.unwrap_or_else(|| row.get("npm_email"));
+        let npm_password = payload.npm_password.unwrap_or_else(|| row.get("npm_password"));
+        let admin_password_hash = password_hash_opt.unwrap_or_else(|| row.get::<Option<String>, _>("admin_password_hash").unwrap_or_default());
+
+        let _ = sqlx::query("INSERT OR REPLACE INTO servers (id, name, local_ip, pihole_path, npm_email, npm_password, active, admin_password_hash) VALUES (?, ?, ?, ?, ?, ?, 1, ?)")
+            .bind(&active_id)
+            .bind(name)
+            .bind(local_ip)
+            .bind(pihole_path)
+            .bind(npm_email)
+            .bind(npm_password)
+            .bind(admin_password_hash)
+            .execute(&state.db)
+            .await;
+    } else {
+        let name = payload.name.unwrap_or_else(|| "Servidor Principal".to_string());
+        let local_ip = payload.local_ip.unwrap_or_default();
+        let pihole_path = payload.pihole_path.unwrap_or_default();
+        let npm_email = payload.npm_email.unwrap_or_default();
+        let npm_password = payload.npm_password.unwrap_or_default();
+        let admin_password_hash = password_hash_opt.unwrap_or_default();
+
+        let _ = sqlx::query("INSERT OR REPLACE INTO servers (id, name, local_ip, pihole_path, npm_email, npm_password, active, admin_password_hash) VALUES (?, ?, ?, ?, ?, ?, 1, ?)")
+            .bind(&active_id)
+            .bind(name)
+            .bind(local_ip)
+            .bind(pihole_path)
+            .bind(npm_email)
+            .bind(npm_password)
+            .bind(admin_password_hash)
+            .execute(&state.db)
+            .await;
+    }
+
+    let onboarded = get_config_val(&state.db, "onboarded").await.unwrap_or_default() == "true";
+    let local_ip = get_config_val(&state.db, "local_ip").await.unwrap_or_default();
+    let pihole_path = get_config_val(&state.db, "pihole_path").await.unwrap_or_default();
+    let npm_email = get_config_val(&state.db, "npm_email").await;
+    let npm_password = get_config_val(&state.db, "npm_password").await;
+    let (servers, active_id) = get_servers_list(&state.db).await;
+
+    Json(serde_json::json!({
+        "success": true,
+        "config": {
+            "onboarded": onboarded,
+            "localIp": local_ip,
+            "piholePath": pihole_path,
+            "npmEmail": npm_email,
+            "npmPassword": npm_password,
+            "adminPassword": "",
+            "activeServerId": active_id,
+            "servers": servers
+        }
+    })).into_response()
+}
+
+// 18. POST /api/config/servers
+pub async fn post_server(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<CreateServerPayload>,
+) -> impl IntoResponse {
+    if payload.name.is_empty() || payload.local_ip.is_empty() || payload.admin_password.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Nome, IP local e senha de Administrador são obrigatórios para registrar um novo servidor." })),
+        ).into_response();
+    }
+
+    let new_id = format!("server-{}", destructure_id());
+    let pihole_path = payload.pihole_path.unwrap_or_else(|| "/app/big-bear-pihole/etc/pihole.toml".to_string());
+    let npm_email = payload.npm_email.unwrap_or_default();
+    let npm_password = payload.npm_password.unwrap_or_default();
+
+    let salt_rounds = 12;
+    let admin_password_hash = match bcrypt::hash(&payload.admin_password, salt_rounds) {
+        Ok(h) => h,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("Falha ao criptografar senha: {}", e) })),
+            ).into_response();
+        }
+    };
+
+    let res = sqlx::query("INSERT INTO servers (id, name, local_ip, pihole_path, npm_email, npm_password, active, admin_password_hash) VALUES (?, ?, ?, ?, ?, ?, 0, ?)")
+        .bind(&new_id)
+        .bind(&payload.name)
+        .bind(&payload.local_ip)
+        .bind(&pihole_path)
+        .bind(&npm_email)
+        .bind(&npm_password)
+        .bind(&admin_password_hash)
+        .execute(&state.db)
+        .await;
+
+    if let Err(e) = res {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("Falha ao cadastrar servidor: {}", e) })),
+        ).into_response();
+    }
+
+    let (servers, _) = get_servers_list(&state.db).await;
+
+    let new_server = ServerProfile {
+        id: new_id,
+        name: payload.name,
+        local_ip: payload.local_ip,
+        pihole_path,
+        npm_email: if npm_email.is_empty() { None } else { Some(npm_email) },
+        npm_password: if npm_password.is_empty() { None } else { Some(npm_password) },
+        admin_password: Some("".to_string()),
+    };
+
+    Json(serde_json::json!({
+        "success": true,
+        "server": new_server,
+        "servers": servers
+    })).into_response()
+}
+
+// 19. PUT /api/config/servers/:id
+pub async fn put_server(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(payload): Json<UpdateServerPayload>,
+) -> impl IntoResponse {
+    let row = sqlx::query("SELECT id, name, local_ip, pihole_path, npm_email, npm_password, active, admin_password_hash FROM servers WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&state.db)
+        .await;
+
+    let server_data = match row {
+        Ok(Some(r)) => r,
+        _ => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "Servidor não encontrado." })),
+            ).into_response();
+        }
+    };
+
+    let active: i32 = server_data.get("active");
+    let name: String = payload.name.unwrap_or_else(|| server_data.get("name"));
+    let local_ip: String = payload.local_ip.unwrap_or_else(|| server_data.get("local_ip"));
+    let pihole_path: String = payload.pihole_path.unwrap_or_else(|| server_data.get("pihole_path"));
+    let npm_email: String = payload.npm_email.unwrap_or_else(|| server_data.get("npm_email"));
+    let npm_password: String = payload.npm_password.unwrap_or_else(|| server_data.get("npm_password"));
+    let mut admin_password_hash: String = server_data.get::<Option<String>, _>("admin_password_hash").unwrap_or_default();
+
+    if let Some(ref admin_pwd) = payload.admin_password {
+        if !admin_pwd.is_empty() {
+            let salt_rounds = 12;
+            if let Ok(h) = bcrypt::hash(admin_pwd, salt_rounds) {
+                admin_password_hash = h;
+            }
+        }
+    }
+
+    let res = sqlx::query("UPDATE servers SET name = ?, local_ip = ?, pihole_path = ?, npm_email = ?, npm_password = ?, admin_password_hash = ? WHERE id = ?")
+        .bind(&name)
+        .bind(&local_ip)
+        .bind(&pihole_path)
+        .bind(&npm_email)
+        .bind(&npm_password)
+        .bind(&admin_password_hash)
+        .bind(&id)
+        .execute(&state.db)
+        .await;
+
+    if let Err(e) = res {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("Falha ao atualizar servidor: {}", e) })),
+        ).into_response();
+    }
+
+    if active == 1 {
+        let _ = sqlx::query("INSERT OR REPLACE INTO system_config (key, value) VALUES ('local_ip', ?)")
+            .bind(&local_ip).execute(&state.db).await;
+        let _ = sqlx::query("INSERT OR REPLACE INTO system_config (key, value) VALUES ('pihole_path', ?)")
+            .bind(&pihole_path).execute(&state.db).await;
+        let _ = sqlx::query("INSERT OR REPLACE INTO system_config (key, value) VALUES ('npm_email', ?)")
+            .bind(&npm_email).execute(&state.db).await;
+        let _ = sqlx::query("INSERT OR REPLACE INTO system_config (key, value) VALUES ('npm_password', ?)")
+            .bind(&npm_password).execute(&state.db).await;
+        let _ = sqlx::query("INSERT OR REPLACE INTO system_config (key, value) VALUES ('npm_token', '')")
+            .execute(&state.db).await;
+
+        if !admin_password_hash.is_empty() {
+            let _ = sqlx::query("INSERT OR REPLACE INTO users (username, password_hash) VALUES ('admin', ?)")
+                .bind(&admin_password_hash).execute(&state.db).await;
+        }
+    }
+
+    let (servers, _) = get_servers_list(&state.db).await;
+
+    let updated_server = ServerProfile {
+        id,
+        name,
+        local_ip,
+        pihole_path,
+        npm_email: if npm_email.is_empty() { None } else { Some(npm_email) },
+        npm_password: if npm_password.is_empty() { None } else { Some(npm_password) },
+        admin_password: Some("".to_string()),
+    };
+
+    Json(serde_json::json!({
+        "success": true,
+        "server": updated_server,
+        "servers": servers
+    })).into_response()
+}
+
+// 20. POST /api/config/servers/:id/activate
+pub async fn post_activate_server(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let row = sqlx::query("SELECT id, name, local_ip, pihole_path, npm_email, npm_password, admin_password_hash FROM servers WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&state.db)
+        .await;
+
+    let server_data = match row {
+        Ok(Some(r)) => r,
+        _ => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "Servidor não encontrado." })),
+            ).into_response();
+        }
+    };
+
+    let local_ip: String = server_data.get("local_ip");
+    let pihole_path: String = server_data.get("pihole_path");
+    let npm_email: String = server_data.get("npm_email");
+    let npm_password: String = server_data.get("npm_password");
+    let admin_password_hash: String = server_data.get::<Option<String>, _>("admin_password_hash").unwrap_or_default();
+
+    let _ = sqlx::query("UPDATE servers SET active = 0").execute(&state.db).await;
+    let _ = sqlx::query("UPDATE servers SET active = 1 WHERE id = ?")
+        .bind(&id)
+        .execute(&state.db)
+        .await;
+
+    let _ = sqlx::query("INSERT OR REPLACE INTO system_config (key, value) VALUES ('local_ip', ?)")
+        .bind(&local_ip).execute(&state.db).await;
+    let _ = sqlx::query("INSERT OR REPLACE INTO system_config (key, value) VALUES ('pihole_path', ?)")
+        .bind(&pihole_path).execute(&state.db).await;
+    let _ = sqlx::query("INSERT OR REPLACE INTO system_config (key, value) VALUES ('npm_email', ?)")
+        .bind(&npm_email).execute(&state.db).await;
+    let _ = sqlx::query("INSERT OR REPLACE INTO system_config (key, value) VALUES ('npm_password', ?)")
+        .bind(&npm_password).execute(&state.db).await;
+    let _ = sqlx::query("INSERT OR REPLACE INTO system_config (key, value) VALUES ('npm_token', '')")
+        .execute(&state.db).await;
+
+    if !admin_password_hash.is_empty() {
+        let _ = sqlx::query("INSERT OR REPLACE INTO users (username, password_hash) VALUES ('admin', ?)")
+            .bind(&admin_password_hash).execute(&state.db).await;
+    }
+
+    let (servers, _) = get_servers_list(&state.db).await;
+
+    Json(serde_json::json!({
+        "success": true,
+        "activeServerId": id,
+        "localIp": local_ip,
+        "piholePath": pihole_path,
+        "hasNpmEmail": !npm_email.is_empty(),
+        "hasNpmPassword": !npm_password.is_empty(),
+        "servers": servers
+    })).into_response()
+}
+
+// 21. DELETE /api/config/servers/:id
+pub async fn delete_server(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let row = sqlx::query("SELECT id, name, local_ip, pihole_path, npm_email, npm_password, active FROM servers WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&state.db)
+        .await;
+
+    let server_data = match row {
+        Ok(Some(r)) => r,
+        _ => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "Servidor não encontrado." })),
+            ).into_response();
+        }
+    };
+
+    let active: i32 = server_data.get("active");
+
+    let count: i32 = match sqlx::query("SELECT COUNT(*) FROM servers")
+        .fetch_one(&state.db)
+        .await
+    {
+        Ok(r) => r.get(0),
+        _ => 0,
+    };
+
+    if count <= 1 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Incapaz de apagar: você precisa de pelo menos um servidor cadastrado." })),
+        ).into_response();
+    }
+
+    let res = sqlx::query("DELETE FROM servers WHERE id = ?")
+        .bind(&id)
+        .execute(&state.db)
+        .await;
+
+    if let Err(e) = res {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("Falha ao deletar servidor: {}", e) })),
+        ).into_response();
+    }
+
+    let mut new_active_id = "".to_string();
+
+    if active == 1 {
+        let fallback_row = sqlx::query("SELECT id, local_ip, pihole_path, npm_email, npm_password, admin_password_hash FROM servers LIMIT 1")
+            .fetch_optional(&state.db)
+            .await;
+
+        if let Ok(Some(fallback_srv)) = fallback_row {
+            let fallback_id: String = fallback_srv.get("id");
+            let local_ip: String = fallback_srv.get("local_ip");
+            let pihole_path: String = fallback_srv.get("pihole_path");
+            let npm_email: String = fallback_srv.get("npm_email");
+            let npm_password: String = fallback_srv.get("npm_password");
+            let admin_password_hash: String = fallback_srv.get::<Option<String>, _>("admin_password_hash").unwrap_or_default();
+
+            let _ = sqlx::query("UPDATE servers SET active = 1 WHERE id = ?")
+                .bind(&fallback_id)
+                .execute(&state.db)
+                .await;
+
+            let _ = sqlx::query("INSERT OR REPLACE INTO system_config (key, value) VALUES ('local_ip', ?)")
+                .bind(&local_ip).execute(&state.db).await;
+            let _ = sqlx::query("INSERT OR REPLACE INTO system_config (key, value) VALUES ('pihole_path', ?)")
+                .bind(&pihole_path).execute(&state.db).await;
+            let _ = sqlx::query("INSERT OR REPLACE INTO system_config (key, value) VALUES ('npm_email', ?)")
+                .bind(&npm_email).execute(&state.db).await;
+            let _ = sqlx::query("INSERT OR REPLACE INTO system_config (key, value) VALUES ('npm_password', ?)")
+                .bind(&npm_password).execute(&state.db).await;
+            let _ = sqlx::query("INSERT OR REPLACE INTO system_config (key, value) VALUES ('npm_token', '')")
+                .execute(&state.db).await;
+
+            if !admin_password_hash.is_empty() {
+                let _ = sqlx::query("INSERT OR REPLACE INTO users (username, password_hash) VALUES ('admin', ?)")
+                    .bind(&admin_password_hash).execute(&state.db).await;
+            }
+
+            new_active_id = fallback_id;
+        }
+    } else {
+        let (_, active_id) = get_servers_list(&state.db).await;
+        new_active_id = active_id;
+    }
+
+    let (servers, _) = get_servers_list(&state.db).await;
+
+    let name: String = server_data.get("name");
+    let local_ip: String = server_data.get("local_ip");
+    let pihole_path: String = server_data.get("pihole_path");
+    let npm_email: String = server_data.get("npm_email");
+    let npm_password: String = server_data.get("npm_password");
+
+    let removed = ServerProfile {
+        id,
+        name,
+        local_ip,
+        pihole_path,
+        npm_email: if npm_email.is_empty() { None } else { Some(npm_email) },
+        npm_password: if npm_password.is_empty() { None } else { Some(npm_password) },
+        admin_password: Some("".to_string()),
+    };
+
+    Json(serde_json::json!({
+        "success": true,
+        "removed": removed,
+        "servers": servers,
+        "activeServerId": new_active_id
+    })).into_response()
+}
+
+// 22. PUT /api/dns-entries/:id
+pub async fn put_dns_entry(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(payload): Json<UpdateDnsEntryPayload>,
+) -> impl IntoResponse {
+    let row = sqlx::query("SELECT id, ip, domain, active, source FROM dns_entries WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&state.db)
+        .await;
+
+    let entry_data = match row {
+        Ok(Some(r)) => r,
+        _ => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "Registro DNS não encontrado" })),
+            ).into_response();
+        }
+    };
+
+    let old_ip: String = entry_data.get("ip");
+    let old_domain: String = entry_data.get("domain");
+    let old_source: String = entry_data.get("source");
+    let active_val: i32 = entry_data.get("active");
+
+    let new_ip = payload.ip.unwrap_or_else(|| old_ip.clone());
+    let new_domain = payload.domain.unwrap_or_else(|| old_domain.clone());
+    let new_source = payload.source.unwrap_or_else(|| old_source.clone());
+
+    if new_domain != old_domain {
+        let exists: i32 = match sqlx::query("SELECT COUNT(*) FROM dns_entries WHERE domain = ? AND id != ?")
+            .bind(&new_domain)
+            .bind(&id)
+            .fetch_one(&state.db)
+            .await
+        {
+            Ok(r) => r.get(0),
+            _ => 0,
+        };
+
+        if exists > 0 {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "Dominio já mapeado localmente" })),
+            ).into_response();
+        }
+    }
+
+    let res = sqlx::query("UPDATE dns_entries SET ip = ?, domain = ?, source = ? WHERE id = ?")
+        .bind(&new_ip)
+        .bind(&new_domain)
+        .bind(&new_source)
+        .bind(&id)
+        .execute(&state.db)
+        .await;
+
+    if let Err(e) = res {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("Falha ao atualizar registro DNS no banco: {}", e) })),
+        ).into_response();
+    }
+
+    let db_clone = state.db.clone();
+    let old_domain_clone = old_domain.clone();
+    let new_domain_clone = new_domain.clone();
+    let new_ip_clone = new_ip.clone();
+
+    tokio::spawn(async move {
+        let path = get_pihole_config_path(&db_clone).await;
+        if !path.is_empty() {
+            if old_domain_clone != new_domain_clone {
+                let _ = pihole::remove_dns_host(&path, &old_domain_clone).await;
+            }
+            let _ = pihole::add_dns_host(&path, &new_ip_clone, &new_domain_clone).await;
+        }
+    });
+
+    let updated_dns_entry = DnsEntry {
+        id,
+        ip: new_ip,
+        domain: new_domain,
+        active: active_val == 1,
+        source: new_source,
+    };
+
+    Json(serde_json::json!({ "success": true, "dnsEntry": updated_dns_entry })).into_response()
+}
+
+// 23. PUT /api/npm-hosts/:id
+pub async fn put_npm_host(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(payload): Json<UpdateNpmHostPayload>,
+) -> impl IntoResponse {
+    let row = sqlx::query("SELECT id, domain_names, forward_scheme, forward_host, forward_port, ssl_active, ssl_provider, status FROM npm_hosts WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&state.db)
+        .await;
+
+    let host_data = match row {
+        Ok(Some(r)) => r,
+        _ => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "Proxy Host custom rule not found" })),
+            ).into_response();
+        }
+    };
+
+    let domain_names_str: String = host_data.get("domain_names");
+    let old_domain_names: Vec<String> = serde_json::from_str(&domain_names_str).unwrap_or_default();
+    let old_forward_scheme: String = host_data.get("forward_scheme");
+    let old_forward_host: String = host_data.get("forward_host");
+    let old_forward_port: i32 = host_data.get("forward_port");
+    let old_ssl_active: i32 = host_data.get("ssl_active");
+    let status: String = host_data.get("status");
+
+    let new_domain_names = payload.domain_names.unwrap_or(old_domain_names);
+    let new_forward_scheme = payload.forward_scheme.unwrap_or(old_forward_scheme);
+    let new_forward_host = payload.forward_host.unwrap_or(old_forward_host);
+    let new_forward_port = payload.forward_port.unwrap_or(old_forward_port as u16);
+    let new_ssl_active = payload.ssl_active.unwrap_or(old_ssl_active == 1);
+    let new_ssl_provider = if new_ssl_active { "Let's Encrypt".to_string() } else { "".to_string() };
+
+    let local_ip = get_config_val(&state.db, "local_ip").await.unwrap_or_else(|| "127.0.0.1".to_string());
+    let npm_email = get_config_val(&state.db, "npm_email").await.unwrap_or_else(|| "admin@example.com".to_string());
+    let mut npm_password = get_config_val(&state.db, "npm_password").await.unwrap_or_default();
+    if npm_password.is_empty() {
+        npm_password = get_config_val(&state.db, "npm_token").await.unwrap_or_default();
+    }
+
+    if local_ip != "127.0.0.1" && !npm_password.is_empty() && !id.starts_with("npm-emulated-") {
+        let npm_api_host = get_npm_api_host(&local_ip).await;
+        let id_clone = id.clone();
+        let new_domain_names_clone = new_domain_names.clone();
+        let new_forward_scheme_clone = new_forward_scheme.clone();
+        let new_forward_host_clone = new_forward_host.clone();
+        
+        tokio::spawn(async move {
+            let _ = npm::update_proxy_host(
+                &npm_api_host,
+                81,
+                &npm_email,
+                &npm_password,
+                &id_clone,
+                new_domain_names_clone,
+                &new_forward_scheme_clone,
+                &new_forward_host_clone,
+                new_forward_port,
+                new_ssl_active,
+            ).await;
+        });
+    }
+
+    let new_domain_names_str = serde_json::to_string(&new_domain_names).unwrap_or_default();
+
+    let res = sqlx::query("UPDATE npm_hosts SET domain_names = ?, forward_scheme = ?, forward_host = ?, forward_port = ?, ssl_active = ?, ssl_provider = ? WHERE id = ?")
+        .bind(&new_domain_names_str)
+        .bind(&new_forward_scheme)
+        .bind(&new_forward_host)
+        .bind(new_forward_port as i32)
+        .bind(if new_ssl_active { 1 } else { 0 })
+        .bind(&new_ssl_provider)
+        .bind(&id)
+        .execute(&state.db)
+        .await;
+
+    if let Err(e) = res {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("Falha ao atualizar NPM host no banco de dados local: {}", e) })),
+        ).into_response();
+    }
+
+    let updated_host = NpmProxyHost {
+        id,
+        domain_names: new_domain_names,
+        forward_scheme: new_forward_scheme,
+        forward_host: new_forward_host,
+        forward_port: new_forward_port,
+        ssl_active: new_ssl_active,
+        ssl_provider: new_ssl_provider,
+        status,
+    };
+
+    Json(serde_json::json!({ "success": true, "npmHost": updated_host })).into_response()
+}
+
+// 24. DELETE /api/npm-hosts/:id
+pub async fn delete_npm_host(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let row = sqlx::query("SELECT id, domain_names, forward_scheme, forward_host, forward_port, ssl_active, ssl_provider, status FROM npm_hosts WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&state.db)
+        .await;
+
+    let host_data = match row {
+        Ok(Some(r)) => r,
+        _ => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "Proxy Host custom rule not found" })),
+            ).into_response();
+        }
+    };
+
+    let domain_names_str: String = host_data.get("domain_names");
+    let domain_names: Vec<String> = serde_json::from_str(&domain_names_str).unwrap_or_default();
+    let forward_scheme: String = host_data.get("forward_scheme");
+    let forward_host: String = host_data.get("forward_host");
+    let forward_port: i32 = host_data.get("forward_port");
+    let ssl_active: i32 = host_data.get("ssl_active");
+    let ssl_provider: String = host_data.get("ssl_provider");
+    let status: String = host_data.get("status");
+
+    let local_ip = get_config_val(&state.db, "local_ip").await.unwrap_or_else(|| "127.0.0.1".to_string());
+    let npm_email = get_config_val(&state.db, "npm_email").await.unwrap_or_else(|| "admin@example.com".to_string());
+    let mut npm_password = get_config_val(&state.db, "npm_password").await.unwrap_or_default();
+    if npm_password.is_empty() {
+        npm_password = get_config_val(&state.db, "npm_token").await.unwrap_or_default();
+    }
+
+    if local_ip != "127.0.0.1" && !npm_password.is_empty() && !id.starts_with("npm-emulated-") {
+        let npm_api_host = get_npm_api_host(&local_ip).await;
+        let id_clone = id.clone();
+        tokio::spawn(async move {
+            let _ = npm::delete_proxy_host(
+                &npm_api_host,
+                81,
+                &npm_email,
+                &npm_password,
+                &id_clone,
+            ).await;
+        });
+    }
+
+    let res = sqlx::query("DELETE FROM npm_hosts WHERE id = ?")
+        .bind(&id)
+        .execute(&state.db)
+        .await;
+
+    if let Err(e) = res {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("Falha ao deletar NPM host no banco de dados local: {}", e) })),
+        ).into_response();
+    }
+
+    let removed_host = NpmProxyHost {
+        id,
+        domain_names,
+        forward_scheme,
+        forward_host,
+        forward_port: forward_port as u16,
+        ssl_active: ssl_active == 1,
+        ssl_provider,
+        status,
+    };
+
+    Json(serde_json::json!({ "success": true, "removed": removed_host })).into_response()
+}
+
+async fn get_servers_list(db: &SqlitePool) -> (Vec<ServerProfile>, String) {
+    let rows = match sqlx::query("SELECT id, name, local_ip, pihole_path, npm_email, npm_password, active FROM servers")
+        .fetch_all(db)
+        .await
+    {
+        Ok(r) => r,
+        _ => Vec::new(),
+    };
+
+    let mut servers = Vec::new();
+    let mut active_id = "server-primary".to_string();
+    let mut found_active = false;
+
+    for r in rows {
+        let id: String = r.get("id");
+        let name: String = r.get("name");
+        let local_ip: String = r.get("local_ip");
+        let pihole_path: String = r.get("pihole_path");
+        let npm_email: String = r.get("npm_email");
+        let npm_password: String = r.get("npm_password");
+        let active: i32 = r.get("active");
+
+        if active == 1 {
+            active_id = id.clone();
+            found_active = true;
+        }
+
+        servers.push(ServerProfile {
+            id,
+            name,
+            local_ip,
+            pihole_path,
+            npm_email: if npm_email.is_empty() { None } else { Some(npm_email) },
+            npm_password: if npm_password.is_empty() { None } else { Some(npm_password) },
+            admin_password: Some("".to_string()),
+        });
+    }
+
+    if !found_active && !servers.is_empty() {
+        active_id = servers[0].id.clone();
+    }
+
+    (servers, active_id)
 }
