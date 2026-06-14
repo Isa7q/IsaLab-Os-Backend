@@ -591,6 +591,9 @@ pub struct EditServicePayload {
     pub category: String,
     pub pinned: bool,
     pub icon_url: Option<String>,
+    pub docker_container_id: Option<String>,
+    pub npm_host_id: Option<String>,
+    pub dns_entry_id: Option<String>,
 }
 
 pub async fn put_edit_service(
@@ -608,7 +611,7 @@ pub async fn put_edit_service(
         }
     };
 
-    let res = sqlx::query("UPDATE services SET name = ?, subdomain = ?, target_ip = ?, target_port = ?, description = ?, category = ?, pinned = ?, icon_url = ? WHERE id = ?")
+    let res = sqlx::query("UPDATE services SET name = ?, subdomain = ?, target_ip = ?, target_port = ?, description = ?, category = ?, pinned = ?, icon_url = ?, docker_container_id = ?, npm_host_id = ?, dns_entry_id = ? WHERE id = ?")
         .bind(&payload.name)
         .bind(&payload.domain)
         .bind(&payload.ip)
@@ -617,6 +620,9 @@ pub async fn put_edit_service(
         .bind(&payload.category)
         .bind(if payload.pinned { 1 } else { 0 })
         .bind(&payload.icon_url)
+        .bind(&payload.docker_container_id)
+        .bind(&payload.npm_host_id)
+        .bind(&payload.dns_entry_id)
         .bind(numeric_id)
         .execute(&state.db)
         .await;
@@ -1010,13 +1016,13 @@ async fn post_toggle_container_fallback(db: &SqlitePool, id: &str) -> axum::resp
 // 9. GET /api/npm-hosts
 #[derive(Deserialize, Debug, Clone)]
 struct NpmApiProxyHost {
-    id: u32,
-    domain_names: Vec<String>,
-    forward_scheme: String,
-    forward_host: String,
-    forward_port: u16,
-    ssl_forced: serde_json::Value,
-    status: serde_json::Value,
+    id: Option<u32>,
+    domain_names: Option<Vec<String>>,
+    forward_scheme: Option<String>,
+    forward_host: Option<String>,
+    forward_port: Option<u16>,
+    ssl_forced: Option<serde_json::Value>,
+    status: Option<serde_json::Value>,
 }
 
 pub async fn get_npm_hosts(State(state): State<Arc<AppState>>) -> axum::response::Response {
@@ -1079,28 +1085,50 @@ pub async fn get_npm_hosts(State(state): State<Arc<AppState>>) -> axum::response
                 println!("[NPM] Sincronizados {} hosts com sucesso em tempo real", api_hosts.len());
                 let mut hosts = Vec::new();
                 for h in api_hosts {
+                    let id_val = h.id.unwrap_or(0);
+                    let domain_names_val = h.domain_names.unwrap_or_default();
+                    let forward_scheme_val = h.forward_scheme.unwrap_or_else(|| "http".to_string());
+                    let forward_host_val = h.forward_host.unwrap_or_default();
+                    let forward_port_val = h.forward_port.unwrap_or(80);
+
                     let ssl_active = match h.ssl_forced {
-                        serde_json::Value::Bool(b) => b,
-                        serde_json::Value::Number(n) => n.as_i64().unwrap_or(0) == 1,
+                        Some(serde_json::Value::Bool(b)) => b,
+                        Some(serde_json::Value::Number(n)) => n.as_i64().unwrap_or(0) == 1,
                         _ => false,
                     };
                     
                     let status_str = match h.status {
-                        serde_json::Value::String(s) => s,
-                        serde_json::Value::Number(n) => if n.as_i64().unwrap_or(0) == 1 { "active".to_string() } else { "inactive".to_string() },
+                        Some(serde_json::Value::String(s)) => s,
+                        Some(serde_json::Value::Number(n)) => if n.as_i64().unwrap_or(0) == 1 { "active".to_string() } else { "inactive".to_string() },
                         _ => "active".to_string(),
                     };
 
-                    hosts.push(NpmProxyHost {
-                        id: h.id.to_string(),
-                        domain_names: h.domain_names,
-                        forward_scheme: h.forward_scheme,
-                        forward_host: h.forward_host,
-                        forward_port: h.forward_port,
+                    let host_item = NpmProxyHost {
+                        id: id_val.to_string(),
+                        domain_names: domain_names_val,
+                        forward_scheme: forward_scheme_val,
+                        forward_host: forward_host_val,
+                        forward_port: forward_port_val,
                         ssl_active,
                         ssl_provider: if ssl_active { "Let's Encrypt".to_string() } else { "".to_string() },
                         status: status_str,
-                    });
+                    };
+
+                    // Sincronizar com banco SQLite local
+                    let domain_names_str = serde_json::to_string(&host_item.domain_names).unwrap_or_default();
+                    let _ = sqlx::query("INSERT OR REPLACE INTO npm_hosts (id, domain_names, forward_scheme, forward_host, forward_port, ssl_active, ssl_provider, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+                        .bind(&host_item.id)
+                        .bind(&domain_names_str)
+                        .bind(&host_item.forward_scheme)
+                        .bind(&host_item.forward_host)
+                        .bind(host_item.forward_port as i32)
+                        .bind(if host_item.ssl_active { 1 } else { 0 })
+                        .bind(&host_item.ssl_provider)
+                        .bind(&host_item.status)
+                        .execute(&state.db)
+                        .await;
+
+                    hosts.push(host_item);
                 }
                 Json(hosts).into_response()
             } else {
@@ -2999,3 +3027,76 @@ async fn get_servers_list(db: &SqlitePool) -> (Vec<ServerProfile>, String) {
 
     (servers, active_id)
 }
+
+// 25. POST /api/services/add & POST /api/services
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddServicePayload {
+    pub name: String,
+    pub subdomain: String,
+    pub ip: String,
+    pub port: u16,
+    pub description: Option<String>,
+    pub category: Option<String>,
+    pub pinned: Option<bool>,
+    pub icon_url: Option<String>,
+    pub docker_container_id: Option<String>,
+    pub npm_host_id: Option<String>,
+    pub dns_entry_id: Option<String>,
+}
+
+pub async fn post_add_service(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<AddServicePayload>,
+) -> impl IntoResponse {
+    let cat = payload.category.unwrap_or_else(|| "Utilities".to_string());
+    let desc = payload.description.unwrap_or_default();
+    let pinned_val = if payload.pinned.unwrap_or(false) { 1 } else { 0 };
+
+    let res = sqlx::query("INSERT INTO services (subdomain, target_ip, target_port, description, icon_url, category, name, pinned, status, docker_container_id, npm_host_id, dns_entry_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'online', ?, ?, ?)")
+        .bind(&payload.subdomain)
+        .bind(&payload.ip)
+        .bind(payload.port as i32)
+        .bind(&desc)
+        .bind(&payload.icon_url)
+        .bind(&cat)
+        .bind(&payload.name)
+        .bind(pinned_val)
+        .bind(&payload.docker_container_id)
+        .bind(&payload.npm_host_id)
+        .bind(&payload.dns_entry_id)
+        .execute(&state.db)
+        .await;
+
+    match res {
+        Ok(r) => {
+            let new_id = r.last_insert_rowid();
+            let item = ServiceItem {
+                id: format!("srv-{}", new_id),
+                name: payload.name,
+                domain: payload.subdomain,
+                ip: payload.ip,
+                port: payload.port,
+                description: desc,
+                category: cat,
+                status: "online".to_string(),
+                pinned: pinned_val == 1,
+                icon_url: payload.icon_url,
+                docker_container_id: payload.docker_container_id,
+                npm_host_id: payload.npm_host_id,
+                dns_entry_id: payload.dns_entry_id,
+            };
+            (
+                StatusCode::CREATED,
+                Json(serde_json::json!({ "success": true, "service": item })),
+            ).into_response()
+        }
+        Err(e) => {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("Falha ao inserir serviço no banco: {}", e) })),
+            ).into_response()
+        }
+    }
+}
+

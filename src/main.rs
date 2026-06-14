@@ -88,7 +88,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/setup", post(handlers::post_onboard)) // Compatibilidade dupla
         .route("/auth/login", post(handlers::post_login))
         .route("/system-stats", get(handlers::get_system_stats))
-        .route("/services", get(handlers::get_services))
+        .route("/services", get(handlers::get_services).post(handlers::post_add_service))
+        .route("/services/add", post(handlers::post_add_service))
         .route("/services/:id/toggle-pin", post(handlers::post_toggle_pin))
         .route("/services/:id", put(handlers::put_edit_service))
         .route("/containers", get(handlers::get_containers))
