@@ -335,25 +335,76 @@ pub async fn get_services(State(state): State<Arc<AppState>>) -> impl IntoRespon
         }
     };
 
+    // Obter containers rodando em tempo real do socket do Docker
+    let running_containers = match tokio::process::Command::new("docker")
+        .args(&["ps", "--format", "{{.ID}} {{.Names}} {{.State}}"])
+        .output()
+        .await
+    {
+        Ok(out) if out.status.success() => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            stdout.lines()
+                .map(|line| {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() >= 2 {
+                        (
+                            parts[0].to_string(), 
+                            parts[1].to_string(), 
+                            parts.get(2).map(|s| s.to_string()).unwrap_or_default()
+                        )
+                    } else {
+                        ("".to_string(), "".to_string(), "".to_string())
+                    }
+                })
+                .filter(|(id, _, _)| !id.is_empty())
+                .collect::<Vec<(String, String, String)>>()
+        }
+        _ => Vec::new(),
+    };
+
     let mut services = Vec::new();
     for row in rows {
         let pinned_int: i32 = row.try_get("pinned").unwrap_or(0);
         let id_int: i64 = row.get("id");
         
+        let docker_container_id: Option<String> = row.try_get("docker_container_id").ok().flatten();
+        let service_name: String = row.try_get("name").unwrap_or_else(|_| "Unnamed".to_string());
+
+        let mut status = row.try_get("status").unwrap_or_else(|_| "online".to_string());
+
+        // Se tiver ID de container cadastrado, verifica se ele está ativo
+        if let Some(ref c_id) = docker_container_id {
+            if !c_id.is_empty() {
+                let is_running = running_containers.iter().any(|(r_id, r_name, r_state)| {
+                    r_id.starts_with(c_id) || c_id.starts_with(r_id) || r_name == c_id || r_state == "running"
+                });
+                status = if is_running { "online".to_string() } else { "offline".to_string() };
+            }
+        } else {
+            // Se não tiver ID de container, mas o nome do serviço casar com o nome de algum container rodando
+            let is_running = running_containers.iter().any(|(_, r_name, _)| {
+                let clean_name = service_name.to_lowercase().replace(' ', "-");
+                r_name == &clean_name || r_name.contains(&clean_name)
+            });
+            if is_running {
+                status = "online".to_string();
+            }
+        }
+
         services.push(ServiceItem {
             id: format!("srv-{}", id_int),
-            name: row.try_get("name").unwrap_or_else(|_| "Unnamed".to_string()),
+            name: service_name,
             domain: row.get("subdomain"),
             ip: row.get("target_ip"),
             port: row.get::<i32, _>("target_port") as u16,
             description: row.get::<Option<String>, _>("description").unwrap_or_default(),
             category: row.get("category"),
-            status: row.try_get("status").unwrap_or_else(|_| "online".to_string()),
+            status,
             pinned: pinned_int == 1,
             icon_url: row.get::<Option<String>, _>("icon_url"),
-            docker_container_id: row.try_get("docker_container_id").ok(),
-            npm_host_id: row.try_get("npm_host_id").ok(),
-            dns_entry_id: row.try_get("dns_entry_id").ok(),
+            docker_container_id,
+            npm_host_id: row.try_get("npm_host_id").ok().flatten(),
+            dns_entry_id: row.try_get("dns_entry_id").ok().flatten(),
         });
     }
 
@@ -896,25 +947,38 @@ pub async fn get_npm_hosts(State(state): State<Arc<AppState>>) -> axum::response
     };
 
     let npm_api_host = get_npm_api_host(&local_ip).await;
-
     let token_url = format!("http://{}:81/api/tokens", npm_api_host);
+    
     let token_payload = serde_json::json!({
         "identity": npm_email,
         "secret": npm_password
     });
 
+    println!("[NPM] Tentando autenticacao em {} com email: '{}'", token_url, npm_email);
     let token_res = client.post(&token_url).json(&token_payload).send().await;
+    
     let token = match token_res {
-        Ok(res) if res.status().is_success() => {
-            #[derive(Deserialize)]
-            struct TokenRes { token: String }
-            if let Ok(body) = res.json::<TokenRes>().await {
-                body.token
+        Ok(res) => {
+            if res.status().is_success() {
+                #[derive(Deserialize)]
+                struct TokenRes { token: String }
+                if let Ok(body) = res.json::<TokenRes>().await {
+                    body.token
+                } else {
+                    println!("[NPM] Erro: Resposta de token nao e um JSON valido");
+                    return get_npm_hosts_fallback(&state.db).await;
+                }
             } else {
+                let status = res.status();
+                let err_text = res.text().await.unwrap_or_default();
+                println!("[NPM] Erro de autenticacao (status {}): {}", status, err_text);
                 return get_npm_hosts_fallback(&state.db).await;
             }
         }
-        _ => return get_npm_hosts_fallback(&state.db).await,
+        Err(e) => {
+            println!("[NPM] Erro de conexao ao conectar em {}: {}", token_url, e);
+            return get_npm_hosts_fallback(&state.db).await;
+        }
     };
 
     let list_url = format!("http://{}:81/api/nginx/proxy-hosts", npm_api_host);
@@ -923,6 +987,7 @@ pub async fn get_npm_hosts(State(state): State<Arc<AppState>>) -> axum::response
     match list_res {
         Ok(res) if res.status().is_success() => {
             if let Ok(api_hosts) = res.json::<Vec<NpmApiProxyHost>>().await {
+                println!("[NPM] Sincronizados {} hosts com sucesso em tempo real", api_hosts.len());
                 let mut hosts = Vec::new();
                 for h in api_hosts {
                     let ssl_active = match h.ssl_forced {
@@ -950,10 +1015,19 @@ pub async fn get_npm_hosts(State(state): State<Arc<AppState>>) -> axum::response
                 }
                 Json(hosts).into_response()
             } else {
+                println!("[NPM] Erro: Falha ao parsear lista de Proxy Hosts");
                 get_npm_hosts_fallback(&state.db).await
             }
         }
-        _ => get_npm_hosts_fallback(&state.db).await,
+        Ok(res) => {
+            let status = res.status();
+            println!("[NPM] Erro ao listar proxy-hosts (status {}). Usando fallback.", status);
+            get_npm_hosts_fallback(&state.db).await
+        }
+        Err(e) => {
+            println!("[NPM] Erro de conexao ao listar proxy-hosts em {}: {}", list_url, e);
+            get_npm_hosts_fallback(&state.db).await
+        }
     }
 }
 

@@ -125,62 +125,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn setup_extra_db_structures(pool: &SqlitePool) -> Result<(), Box<dyn std::error::Error>> {
-    // Criar tabelas extras
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS containers (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            image TEXT NOT NULL,
-            status TEXT NOT NULL,
-            created TEXT NOT NULL,
-            ports TEXT NOT NULL,
-            cpu REAL NOT NULL,
-            memory TEXT NOT NULL,
-            labels TEXT NOT NULL
-        );"
-    ).execute(pool).await?;
-
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS npm_hosts (
-            id TEXT PRIMARY KEY,
-            domain_names TEXT NOT NULL,
-            forward_scheme TEXT NOT NULL,
-            forward_host TEXT NOT NULL,
-            forward_port INTEGER NOT NULL,
-            ssl_active INTEGER NOT NULL,
-            ssl_provider TEXT NOT NULL,
-            status TEXT NOT NULL
-        );"
-    ).execute(pool).await?;
-
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS dns_entries (
-            id TEXT PRIMARY KEY,
-            ip TEXT NOT NULL,
-            domain TEXT NOT NULL UNIQUE,
-            active INTEGER NOT NULL,
-            source TEXT NOT NULL
-        );"
-    ).execute(pool).await?;
-
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS pipelines (
-            id TEXT PRIMARY KEY,
-            service_name TEXT NOT NULL,
-            subdomain TEXT NOT NULL,
-            ip TEXT NOT NULL,
-            port INTEGER NOT NULL,
-            description TEXT,
-            category TEXT NOT NULL,
-            register_npm INTEGER NOT NULL,
-            register_pihole INTEGER NOT NULL,
-            create_docker INTEGER NOT NULL,
-            status TEXT NOT NULL,
-            current_step TEXT NOT NULL,
-            logs TEXT NOT NULL
-        );"
-    ).execute(pool).await?;
-
     // Adicionar colunas extras na tabela services se não existirem
     let queries = vec![
         "ALTER TABLE services ADD COLUMN name TEXT;",
