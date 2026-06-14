@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Guia técnico e especificação de endpoints da API em Rust Axum para integração com o frontend do IsaLab Homelab OS.">
+    <title>Guia de Integração e APIs - IsaLab Homelab OS</title>
+    <!-- Fonte Inter do Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    
+    <style>
+        :root {
+            --bg-color: #070a13;
+            --card-bg: #0d1222;
+            --border-color: #1e2942;
+            --text-main: #e2e8f0;
+            --text-muted: #94a3b8;
+            --primary: #10b981; /* Esmeralda */
+            --primary-hover: #059669;
+            --secondary: #3b82f6; /* Azul */
+            --accent: #8b5cf6; /* Roxo */
+            --code-bg: #141b2f;
+            --danger: #ef4444;
+            --warn: #f59e0b;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            line-height: 1.6;
+            padding: 40px 20px;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 50px;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 30px;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            font-weight: 800;
+            color: #ffffff;
+            margin-bottom: 10px;
+            letter-spacing: -0.025em;
+            background: linear-gradient(to right, #ffffff, #60a5fa, #34d399);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .subtitle {
+            font-size: 1.1rem;
+            color: var(--text-muted);
+            font-weight: 400;
+        }
+
+        h2 {
+            font-size: 1.75rem;
+            color: #ffffff;
+            margin-top: 40px;
+            margin-bottom: 20px;
+            border-left: 4px solid var(--primary);
+            padding-left: 15px;
+            letter-spacing: -0.02em;
+        }
+
+        h3 {
+            font-size: 1.25rem;
+            color: #ffffff;
+            margin-top: 25px;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        p {
+            color: var(--text-main);
+            margin-bottom: 15px;
+            font-size: 1rem;
+        }
+
+        ul, ol {
+            margin-bottom: 20px;
+            padding-left: 25px;
+            color: var(--text-main);
+        }
+
+        li {
+            margin-bottom: 8px;
+        }
+
+        /* Badge Estilos */
+        .badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .badge-get {
+            background-color: rgba(59, 130, 246, 0.2);
+            color: #60a5fa;
+            border: 1px solid rgba(59, 130, 246, 0.3);
+        }
+
+        .badge-post {
+            background-color: rgba(16, 185, 129, 0.2);
+            color: #34d399;
+            border: 1px solid rgba(16, 185, 129, 0.3);
+        }
+
+        .badge-put {
+            background-color: rgba(245, 158, 11, 0.2);
+            color: #fbbf24;
+            border: 1px solid rgba(245, 158, 11, 0.3);
+        }
+
+        .badge-delete {
+            background-color: rgba(239, 68, 68, 0.2);
+            color: #f87171;
+            border: 1px solid rgba(239, 68, 68, 0.3);
+        }
+
+        /* Alertas visuais */
+        .alert {
+            background-color: var(--card-bg);
+            border-left: 4px solid var(--accent);
+            padding: 15px 20px;
+            border-radius: 4px;
+            margin-bottom: 25px;
+            color: var(--text-main);
+        }
+
+        .alert-title {
+            font-weight: 700;
+            margin-bottom: 5px;
+            color: #ffffff;
+        }
+
+        /* Cartões de APIs */
+        .api-card {
+            background-color: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 24px;
+            margin-bottom: 25px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            transition: transform 0.2s ease, border-color 0.2s ease;
+        }
+
+        .api-card:hover {
+            transform: translateY(-2px);
+            border-color: rgba(59, 130, 246, 0.4);
+        }
+
+        .api-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 15px;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 12px;
+        }
+
+        .api-route {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #ffffff;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .api-desc {
+            color: var(--text-muted);
+            font-size: 0.95rem;
+            margin-bottom: 15px;
+        }
+
+        /* Codeblock styling */
+        pre {
+            background-color: var(--code-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 16px;
+            overflow-x: auto;
+            margin-bottom: 15px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.9rem;
+        }
+
+        code {
+            font-family: 'JetBrains Mono', monospace;
+            color: #38bdf8;
+        }
+
+        .code-title {
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            margin-bottom: 6px;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+        }
+
+        /* Tabelas */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+            margin-bottom: 25px;
+            font-size: 0.95rem;
+        }
+
+        th, td {
+            padding: 12px 16px;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        th {
+            background-color: rgba(30, 41, 66, 0.5);
+            color: #ffffff;
+            font-weight: 600;
+        }
+
+        tr:hover {
+            background-color: rgba(30, 41, 66, 0.2);
+        }
+
+        /* Responsividade */
+        @media (max-width: 768px) {
+            body {
+                padding: 20px 10px;
+            }
+            .api-header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 10px;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        
+        <header>
+            <h1 id="page-title">Guia de Integração e APIs</h1>
+            <p class="subtitle">IsaLab Homelab OS — API REST Nativa e Assíncrona em Rust</p>
+        </header>
+
+        <div class="alert">
+            <div class="alert-title">🚀 Standalone & Unificado</div>
+            <p>O backend em Rust foi desenvolvido para atuar de forma unificada: ele expõe a API REST no endpoint prefixado por <code>/api</code> e, simultaneamente, serve os arquivos estáticos de produção do frontend na mesma porta (padrão: <code>3000</code>). Isso elimina qualquer necessidade de configurações complexas de CORS ou proxies de desenvolvimento!</p>
+        </div>
+
+        <h2>1. Visão Geral e Inicialização</h2>
+        <p>A API consome e altera o banco de dados SQLite persistente local <code>homelab.db</code>. Toda a autenticação é gerida via token <strong>JWT</strong> assinado em tempo de execução e as senhas do operador são tratadas com criptografia unidirecional <strong>Bcrypt</strong>.</p>
+        
+        <table>
+            <thead>
+                <tr>
+                    <th>Método</th>
+                    <th>Rota</th>
+                    <th>Tipo</th>
+                    <th>Função</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><span class="badge badge-get">GET</span></td>
+                    <td>/api/status</td>
+                    <td>Público</td>
+                    <td>Verifica se o sistema já passou pelo setup/onboarding inicial.</td>
+                </tr>
+                <tr>
+                    <td><span class="badge badge-post">POST</span></td>
+                    <td>/api/onboard</td>
+                    <td>Público</td>
+                    <td>Salva os dados do onboarding inicial e gera a senha master.</td>
+                </tr>
+                <tr>
+                    <td><span class="badge badge-post">POST</span></td>
+                    <td>/api/auth/login</td>
+                    <td>Público</td>
+                    <td>Autentica o administrador e gera o token JWT.</td>
+                </tr>
+                <tr>
+                    <td><span class="badge badge-get">GET</span></td>
+                    <td>/api/services</td>
+                    <td>Público</td>
+                    <td>Lista todos os serviços cadastrados no diretório SQLite.</td>
+                </tr>
+                <tr>
+                    <td><span class="badge badge-post">POST</span></td>
+                    <td>/api/pipelines/run</td>
+                    <td>Protegido</td>
+                    <td>Dispara o fluxo de implantação assíncrono em background.</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h2>2. Detalhamento de Endpoints</h2>
+
+        <!-- Status API -->
+        <div class="api-card">
+            <div class="api-header">
+                <div class="api-route">
+                    <span class="badge badge-get">GET</span>
+                    <span>/api/status</span>
+                </div>
+                <span class="badge" style="background-color: var(--primary); color: #000;">Público</span>
+            </div>
+            <p class="api-desc">Usado na inicialização do frontend. Retorna se o Wizard de primeiro acesso precisa ser exibido e as configurações atuais.</p>
+            
+            <div class="code-title">Resposta (200 OK)</div>
+            <pre><code>{
+  "onboarded": false,
+  "localIp": "",
+  "piholePath": "",
+  "hasNpmToken": false
+}</code></pre>
+        </div>
+
+        <!-- Onboard API -->
+        <div class="api-card">
+            <div class="api-header">
+                <div class="api-route">
+                    <span class="badge badge-post">POST</span>
+                    <span>/api/onboard</span>
+                </div>
+                <span class="badge" style="background-color: var(--primary); color: #000;">Público</span>
+            </div>
+            <p class="api-desc">Enviado pelo formulário do Wizard de primeiro acesso. Registra os caminhos e cria a senha mestra.</p>
+            
+            <div class="code-title">Corpo da Requisição (JSON)</div>
+            <pre><code>{
+  "localIp": "192.168.1.50",
+  "piholePath": "/app/big-bear-pihole/etc/pihole.toml",
+  "npmToken": "jwt-token-npm",
+  "adminPassword": "minha_senha_mestra"
+}</code></pre>
+
+            <div class="code-title">Resposta Sucesso (200 OK)</div>
+            <pre><code>{
+  "success": true,
+  "message": "Onboarding realizado com sucesso!"
+}</code></pre>
+        </div>
+
+        <!-- Login API -->
+        <div class="api-card">
+            <div class="api-header">
+                <div class="api-route">
+                    <span class="badge badge-post">POST</span>
+                    <span>/api/auth/login</span>
+                </div>
+                <span class="badge" style="background-color: var(--primary); color: #000;">Público</span>
+            </div>
+            <p class="api-desc">Valida as credenciais administrativas do painel contra o banco.</p>
+            
+            <div class="code-title">Corpo da Requisição (JSON)</div>
+            <pre><code>{
+  "password": "senha_digitada"
+}</code></pre>
+
+            <div class="code-title">Resposta Sucesso (200 OK)</div>
+            <pre><code>{
+  "success": true,
+  "token": "isa-homelab-admin-auth-token-jwt-string"
+}</code></pre>
+
+            <div class="code-title">Resposta Erro (401 Unauthorized)</div>
+            <pre><code>{
+  "error": "Senha de administrador inválida."
+}</code></pre>
+        </div>
+
+        <!-- Pipelines API -->
+        <div class="api-card">
+            <div class="api-header">
+                <div class="api-route">
+                    <span class="badge badge-post">POST</span>
+                    <span>/api/pipelines/run</span>
+                </div>
+                <span class="badge" style="background-color: var(--accent); color: #fff;">Protegido</span>
+            </div>
+            <p class="api-desc">Dispara o pipeline automatizado em background utilizando Tokio Tasks. Retorna imediatamente um ID de controle para o frontend fazer consultas periódicas de logs.</p>
+            
+            <div class="code-title">Corpo da Requisição (JSON)</div>
+            <pre><code>{
+  "serviceName": "Komga Comics",
+  "subdomain": "komga.isa7q.uk",
+  "ip": "192.168.1.50",
+  "port": 8080,
+  "description": "Servidor de quadrinhos",
+  "category": "Media",
+  "registerNPM": true,
+  "registerPihole": true,
+  "createDocker": true
+}</code></pre>
+
+            <div class="code-title">Resposta (200 OK)</div>
+            <pre><code>{
+  "success": true,
+  "pipelineId": "pipe-1718361000000"
+}</code></pre>
+        </div>
+
+        <h2>3. O Motor de Pipelines Assíncronos</h2>
+        <p>Ao receber a requisição de execução de pipeline, o backend Rust executa as seguintes etapas não-bloqueantes:</p>
+        <ol>
+            <li><strong>Persistência de Metadados:</strong> Estrutura o log inicial e o status <code>running</code> no SQLite.</li>
+            <li><strong>Modificação do Pi-hole TOML:</strong> Lê de forma segura o <code>pihole.toml</code>, localiza o array <code>[dns].hosts</code>, remove duplicatas, insere a nova linha <code>"IP SUBDOMÍNIO"</code> e executa o comando assíncrono <code>pihole restartdns</code>.</li>
+            <li><strong>Pipeline NPM:</strong> Autentica na API do Nginx Proxy Manager no IP configurado, gera o token JWT temporário e envia o payload para cadastrar a regra de proxy e SSL.</li>
+            <li><strong>Docker Container:</strong> Cria o contêiner virtualizado no SQLite com labels personalizadas e status <code>running</code>.</li>
+            <li><strong>API do CasaOS:</strong> Intercepta o ID do serviço e consulta a API oficial do CasaOS na porta <code>88</code> para extrair a URL direta de seu ícone, atualizando a coluna <code>icon_url</code>.</li>
+        </ol>
+
+        <div class="alert" style="border-left-color: var(--primary);">
+            <div class="alert-title">💡 Dica para Integração do Frontend</div>
+            <p>Como a execução da pipeline roda em uma thread paralela do Tokio, o frontend deve fazer polling do endpoint <code>GET /api/pipelines</code> a cada 1.5s para capturar os logs incrementais e atualizar a janela de progresso na tela do operador.</p>
+        </div>
+
+    </div>
+
+    <script>
+        // Unique ID de validação para testes de acessibilidade e estrutura
+        document.getElementById("page-title").setAttribute("data-validated", "true");
+    </script>
+</body>
+</html>

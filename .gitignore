@@ -1,0 +1,7 @@
+/target
+/homelab.db
+/homelab.db-journal
+/homelab.db-shm
+/homelab.db-wal
+.env
+*.log
