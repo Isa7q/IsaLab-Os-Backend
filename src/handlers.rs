@@ -164,7 +164,9 @@ pub async fn get_status(State(state): State<Arc<AppState>>) -> impl IntoResponse
 pub struct OnboardPayload {
     pub local_ip: String,
     pub pihole_path: String,
-    pub npm_token: Option<String>,
+    pub npm_email: Option<String>,
+    pub npm_password: Option<String>,
+    pub npm_token: Option<String>, // Mantido para compatibilidade com payloads legados
     pub admin_password: String,
 }
 
@@ -185,12 +187,19 @@ pub async fn post_onboard(
         ).into_response();
     }
 
+    let email = payload.npm_email.as_deref().unwrap_or("admin@example.com");
+    let password = payload.npm_password.as_deref()
+        .or(payload.npm_token.as_deref())
+        .unwrap_or("");
+
     // Salvar configurações
     let configs = vec![
         ("onboarded", "true"),
         ("local_ip", &payload.local_ip),
         ("pihole_path", &payload.pihole_path),
-        ("npm_token", payload.npm_token.as_deref().unwrap_or("")),
+        ("npm_email", email),
+        ("npm_password", password),
+        ("npm_token", password), // Mantido por compatibilidade histórica
     ];
 
     for (k, v) in configs {
@@ -514,9 +523,128 @@ pub async fn put_edit_service(
 }
 
 // 7. GET /api/containers
-pub async fn get_containers(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+#[derive(Deserialize, Debug, Clone)]
+#[allow(dead_code)]
+struct DockerPsItem {
+    #[serde(rename = "ID")]
+    id: String,
+    #[serde(rename = "Names")]
+    names: String,
+    #[serde(rename = "Image")]
+    image: String,
+    #[serde(rename = "State")]
+    state: String,
+    #[serde(rename = "Status")]
+    status: String,
+    #[serde(rename = "CreatedAt")]
+    created_at: String,
+    #[serde(rename = "Ports")]
+    ports: String,
+}
+
+pub async fn get_containers(State(state): State<Arc<AppState>>) -> axum::response::Response {
+    let ps_output = tokio::process::Command::new("docker")
+        .args(&["ps", "-a", "--format", "{{json .}}"])
+        .output()
+        .await;
+
+    let out = match ps_output {
+        Ok(o) if o.status.success() => o,
+        _ => return get_containers_fallback(&state.db).await,
+    };
+
+    let stdout_str = String::from_utf8_lossy(&out.stdout);
+    let mut api_containers = Vec::new();
+    for line in stdout_str.lines() {
+        if let Ok(item) = serde_json::from_str::<DockerPsItem>(line) {
+            api_containers.push(item);
+        }
+    }
+
+    let stats_output = tokio::process::Command::new("docker")
+        .args(&["stats", "--no-stream", "--format", "{{json .}}"])
+        .output()
+        .await;
+
+    let mut stats_map = HashMap::new();
+    if let Ok(o) = stats_output {
+        if o.status.success() {
+            let stats_str = String::from_utf8_lossy(&o.stdout);
+            for line in stats_str.lines() {
+                #[derive(Deserialize)]
+                struct StatItem {
+                    #[serde(rename = "ID")]
+                    id: String,
+                    #[serde(rename = "CPUPerc")]
+                    cpu_perc: String,
+                    #[serde(rename = "MemUsage")]
+                    mem_usage: String,
+                }
+                if let Ok(stat) = serde_json::from_str::<StatItem>(line) {
+                    stats_map.insert(stat.id, (stat.cpu_perc, stat.mem_usage));
+                }
+            }
+        }
+    }
+
+    let mut containers = Vec::new();
+    for c in api_containers {
+        let ports_vec: Vec<String> = c.ports
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        let (cpu, memory) = match stats_map.get(&c.id) {
+            Some((cpu_str, mem_str)) => {
+                let parsed_cpu = cpu_str
+                    .trim_end_matches('%')
+                    .parse::<f64>()
+                    .unwrap_or(0.0);
+                let cleaned_mem = mem_str.split('/').next().unwrap_or(mem_str).trim().to_string();
+                (parsed_cpu, cleaned_mem)
+            }
+            None => (0.0, "0MB".to_string()),
+        };
+
+        let srv_row = sqlx::query("SELECT description, category, subdomain FROM services WHERE docker_container_id = ? OR name = ?")
+            .bind(&c.id)
+            .bind(&c.names)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten();
+
+        let mut labels = HashMap::new();
+        if let Some(row) = srv_row {
+            labels.insert("homelab.description".to_string(), row.get::<Option<String>, _>("description").unwrap_or_default());
+            labels.insert("homelab.category".to_string(), row.get::<String, _>("category"));
+            labels.insert("homelab.domain".to_string(), row.get::<String, _>("subdomain"));
+        } else {
+            labels.insert("homelab.description".to_string(), "Contêiner Docker nativo".to_string());
+            labels.insert("homelab.category".to_string(), "Utilities".to_string());
+            labels.insert("homelab.domain".to_string(), format!("{}.local", c.names));
+        }
+
+        containers.push(DockerContainer {
+            id: c.id,
+            name: c.names,
+            image: c.image,
+            status: c.status,
+            created: c.created_at,
+            ports: ports_vec,
+            cpu,
+            memory,
+            labels,
+        });
+    }
+
+    Json(containers).into_response()
+}
+
+async fn get_containers_fallback(db: &SqlitePool) -> axum::response::Response {
     let rows = match sqlx::query("SELECT id, name, image, status, created, ports, cpu, memory, labels FROM containers")
-        .fetch_all(&state.db)
+        .fetch_all(db)
         .await
     {
         Ok(r) => r,
@@ -532,7 +660,6 @@ pub async fn get_containers(State(state): State<Arc<AppState>>) -> impl IntoResp
     for row in rows {
         let ports_str: String = row.get("ports");
         let labels_str: String = row.get("labels");
-
         let ports: Vec<String> = serde_json::from_str(&ports_str).unwrap_or_default();
         let labels: HashMap<String, String> = serde_json::from_str(&labels_str).unwrap_or_default();
 
@@ -556,10 +683,121 @@ pub async fn get_containers(State(state): State<Arc<AppState>>) -> impl IntoResp
 pub async fn post_toggle_container(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
+    let inspect_output = tokio::process::Command::new("docker")
+        .args(&["inspect", "--format", "{{.State.Running}}", &id])
+        .output()
+        .await;
+
+    if let Ok(out) = inspect_output {
+        if out.status.success() {
+            let stdout_str = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            let is_running = stdout_str == "true";
+            
+            let action = if is_running { "stop" } else { "start" };
+            let toggle_output = tokio::process::Command::new("docker")
+                .args(&[action, &id])
+                .output()
+                .await;
+
+            if let Ok(t_out) = toggle_output {
+                if t_out.status.success() {
+                    let new_status = if is_running { "stopped" } else { "running" };
+                    let service_status = if is_running { "offline" } else { "online" };
+                    
+                    let _ = sqlx::query("UPDATE containers SET status = ? WHERE id = ?")
+                        .bind(&new_status)
+                        .bind(&id)
+                        .execute(&state.db)
+                        .await;
+
+                    let _ = sqlx::query("UPDATE services SET status = ? WHERE docker_container_id = ?")
+                        .bind(&service_status)
+                        .bind(&id)
+                        .execute(&state.db)
+                        .await;
+
+                    return get_single_container_response(&state.db, &id).await;
+                }
+            }
+        }
+    }
+
+    post_toggle_container_fallback(&state.db, &id).await
+}
+
+async fn get_single_container_response(db: &SqlitePool, id: &str) -> axum::response::Response {
+    let inspect_output = tokio::process::Command::new("docker")
+        .args(&["inspect", "--format", "{{json .}}", id])
+        .output()
+        .await;
+
+    if let Ok(out) = inspect_output {
+        if out.status.success() {
+            let stdout_str = String::from_utf8_lossy(&out.stdout);
+            
+            #[derive(Deserialize)]
+            #[allow(non_snake_case, dead_code)]
+            struct InspectRes {
+                Id: String,
+                Name: String,
+                Config: InspectConfig,
+                State: InspectState,
+                Created: String,
+            }
+            #[derive(Deserialize)]
+            #[allow(non_snake_case, dead_code)]
+            struct InspectConfig {
+                Image: String,
+                Labels: Option<HashMap<String, String>>,
+            }
+            #[derive(Deserialize)]
+            #[allow(non_snake_case, dead_code)]
+            struct InspectState {
+                Status: String,
+            }
+
+            if let Ok(ins) = serde_json::from_str::<InspectRes>(&stdout_str) {
+                let status_str = ins.State.Status;
+                
+                let srv_row = sqlx::query("SELECT description, category, subdomain FROM services WHERE docker_container_id = ? OR name = ?")
+                    .bind(id)
+                    .bind(&ins.Name)
+                    .fetch_optional(db)
+                    .await
+                    .ok()
+                    .flatten();
+
+                let mut labels = ins.Config.Labels.unwrap_or_default();
+                if let Some(row) = srv_row {
+                    labels.insert("homelab.description".to_string(), row.get::<Option<String>, _>("description").unwrap_or_default());
+                    labels.insert("homelab.category".to_string(), row.get::<String, _>("category"));
+                    labels.insert("homelab.domain".to_string(), row.get::<String, _>("subdomain"));
+                }
+
+                let c = DockerContainer {
+                    id: id.to_string(),
+                    name: ins.Name.trim_start_matches('/').to_string(),
+                    image: ins.Config.Image,
+                    status: status_str,
+                    created: ins.Created,
+                    ports: Vec::new(),
+                    cpu: 0.0,
+                    memory: "0MB".to_string(),
+                    labels,
+                };
+                return Json(serde_json::json!({ "success": true, "container": c })).into_response();
+            }
+        }
+    }
+    
+    post_toggle_container_fallback(db, id).await
+}
+
+async fn post_toggle_container_fallback(db: &SqlitePool, id: &str) -> axum::response::Response {
     let row = sqlx::query("SELECT id, name, image, status, created, ports, cpu, memory, labels FROM containers WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(&state.db)
+        .bind(id)
+        .fetch_optional(db)
         .await;
 
     let container = match row {
@@ -576,39 +814,28 @@ pub async fn post_toggle_container(
     let (new_status, new_cpu, new_memory, service_status) = if current_status == "running" {
         ("stopped".to_string(), 0.0, "0MB".to_string(), "offline".to_string())
     } else {
-        // Gerar estatísticas aleatórias
         let cpu_sim = ((0.4 + rand_flutuation() * 1.5) * 10.0).round() / 10.0;
         let mem_sim = format!("{}MB", (60 + (rand_flutuation() * 180.0) as u32));
         ("running".to_string(), cpu_sim, mem_sim, "online".to_string())
     };
 
-    // Atualizar container
-    let res = sqlx::query("UPDATE containers SET status = ?, cpu = ?, memory = ? WHERE id = ?")
+    let _ = sqlx::query("UPDATE containers SET status = ?, cpu = ?, memory = ? WHERE id = ?")
         .bind(&new_status)
         .bind(new_cpu)
         .bind(&new_memory)
-        .bind(&id)
-        .execute(&state.db)
+        .bind(id)
+        .execute(db)
         .await;
 
-    if let Err(e) = res {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": format!("Falha ao atualizar container: {}", e) })),
-        ).into_response();
-    }
-
-    // Sincronizar status do serviço correspondente
     let _ = sqlx::query("UPDATE services SET status = ? WHERE docker_container_id = ?")
         .bind(&service_status)
-        .bind(&id)
-        .execute(&state.db)
+        .bind(id)
+        .execute(db)
         .await;
 
-    // Buscar container atualizado
     let updated_row = sqlx::query("SELECT id, name, image, status, created, ports, cpu, memory, labels FROM containers WHERE id = ?")
-        .bind(&id)
-        .fetch_one(&state.db)
+        .bind(id)
+        .fetch_one(db)
         .await;
 
     match updated_row {
@@ -641,9 +868,96 @@ pub async fn post_toggle_container(
 }
 
 // 9. GET /api/npm-hosts
-pub async fn get_npm_hosts(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+#[derive(Deserialize, Debug, Clone)]
+struct NpmApiProxyHost {
+    id: u32,
+    domain_names: Vec<String>,
+    forward_scheme: String,
+    forward_host: String,
+    forward_port: u16,
+    ssl_forced: serde_json::Value,
+    status: serde_json::Value,
+}
+
+pub async fn get_npm_hosts(State(state): State<Arc<AppState>>) -> axum::response::Response {
+    let local_ip = match get_config_val(&state.db, "local_ip").await {
+        Some(ip) if !ip.is_empty() => ip,
+        _ => return get_npm_hosts_fallback(&state.db).await,
+    };
+    let npm_email = get_config_val(&state.db, "npm_email").await.unwrap_or_else(|| "admin@example.com".to_string());
+    let mut npm_password = get_config_val(&state.db, "npm_password").await.unwrap_or_default();
+    if npm_password.is_empty() {
+        npm_password = get_config_val(&state.db, "npm_token").await.unwrap_or_default();
+    }
+
+    let client = match reqwest::Client::builder().timeout(std::time::Duration::from_secs(3)).build() {
+        Ok(c) => c,
+        Err(_) => return get_npm_hosts_fallback(&state.db).await,
+    };
+
+    let token_url = format!("http://{}:81/api/tokens", local_ip);
+    let token_payload = serde_json::json!({
+        "identity": npm_email,
+        "secret": npm_password
+    });
+
+    let token_res = client.post(&token_url).json(&token_payload).send().await;
+    let token = match token_res {
+        Ok(res) if res.status().is_success() => {
+            #[derive(Deserialize)]
+            struct TokenRes { token: String }
+            if let Ok(body) = res.json::<TokenRes>().await {
+                body.token
+            } else {
+                return get_npm_hosts_fallback(&state.db).await;
+            }
+        }
+        _ => return get_npm_hosts_fallback(&state.db).await,
+    };
+
+    let list_url = format!("http://{}:81/api/nginx/proxy-hosts", local_ip);
+    let list_res = client.get(&list_url).header("Authorization", format!("Bearer {}", token)).send().await;
+
+    match list_res {
+        Ok(res) if res.status().is_success() => {
+            if let Ok(api_hosts) = res.json::<Vec<NpmApiProxyHost>>().await {
+                let mut hosts = Vec::new();
+                for h in api_hosts {
+                    let ssl_active = match h.ssl_forced {
+                        serde_json::Value::Bool(b) => b,
+                        serde_json::Value::Number(n) => n.as_i64().unwrap_or(0) == 1,
+                        _ => false,
+                    };
+                    
+                    let status_str = match h.status {
+                        serde_json::Value::String(s) => s,
+                        serde_json::Value::Number(n) => if n.as_i64().unwrap_or(0) == 1 { "active".to_string() } else { "inactive".to_string() },
+                        _ => "active".to_string(),
+                    };
+
+                    hosts.push(NpmProxyHost {
+                        id: h.id.to_string(),
+                        domain_names: h.domain_names,
+                        forward_scheme: h.forward_scheme,
+                        forward_host: h.forward_host,
+                        forward_port: h.forward_port,
+                        ssl_active,
+                        ssl_provider: if ssl_active { "Let's Encrypt".to_string() } else { "".to_string() },
+                        status: status_str,
+                    });
+                }
+                Json(hosts).into_response()
+            } else {
+                get_npm_hosts_fallback(&state.db).await
+            }
+        }
+        _ => get_npm_hosts_fallback(&state.db).await,
+    }
+}
+
+async fn get_npm_hosts_fallback(db: &SqlitePool) -> axum::response::Response {
     let rows = match sqlx::query("SELECT id, domain_names, forward_scheme, forward_host, forward_port, ssl_active, ssl_provider, status FROM npm_hosts")
-        .fetch_all(&state.db)
+        .fetch_all(db)
         .await
     {
         Ok(r) => r,
@@ -697,10 +1011,40 @@ pub async fn post_npm_hosts(
         ).into_response();
     }
 
-    let id = format!("npm-{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis());
-    let domain_names_str = serde_json::to_string(&payload.domain_names).unwrap_or_default();
+    let local_ip = get_config_val(&state.db, "local_ip").await.unwrap_or_else(|| "127.0.0.1".to_string());
+    let npm_email = get_config_val(&state.db, "npm_email").await.unwrap_or_else(|| "admin@example.com".to_string());
+    let mut npm_password = get_config_val(&state.db, "npm_password").await.unwrap_or_default();
+    if npm_password.is_empty() {
+        npm_password = get_config_val(&state.db, "npm_token").await.unwrap_or_default();
+    }
+
     let ssl_active = payload.ssl_active.unwrap_or(false);
     let forward_scheme = payload.forward_scheme.unwrap_or_else(|| "http".to_string());
+
+    // Se estiver configurado, tenta criar no NPM físico de verdade
+    let id = if local_ip != "127.0.0.1" && !npm_password.is_empty() {
+        match npm::create_proxy_host(
+            &local_ip,
+            81,
+            &npm_email,
+            &npm_password,
+            payload.domain_names.clone(),
+            &forward_scheme,
+            &payload.forward_host,
+            payload.forward_port,
+            ssl_active,
+        ).await {
+            Ok(n_id) => n_id,
+            Err(e) => {
+                println!("Aviso: Falha ao cadastrar Proxy Host no NPM físico ({}). Salvando apenas no SQLite local.", e);
+                format!("npm-{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis())
+            }
+        }
+    } else {
+        format!("npm-{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis())
+    };
+
+    let domain_names_str = serde_json::to_string(&payload.domain_names).unwrap_or_default();
     let ssl_provider = if ssl_active { "Let's Encrypt".to_string() } else { "".to_string() };
 
     let res = sqlx::query("INSERT INTO npm_hosts (id, domain_names, forward_scheme, forward_host, forward_port, ssl_active, ssl_provider, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'active')")
@@ -717,7 +1061,7 @@ pub async fn post_npm_hosts(
     if let Err(e) = res {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": format!("Falha ao inserir NPM host: {}", e) })),
+            Json(serde_json::json!({ "error": format!("Falha ao inserir NPM host no banco de dados local: {}", e) })),
         ).into_response();
     }
 
@@ -791,9 +1135,52 @@ pub async fn post_toggle_npm_ssl(
 }
 
 // 12. GET /api/dns-entries
-pub async fn get_dns_entries(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+pub async fn get_dns_entries(State(state): State<Arc<AppState>>) -> axum::response::Response {
+    let pihole_path = match get_config_val(&state.db, "pihole_path").await {
+        Some(p) if !p.is_empty() => p,
+        _ => return get_dns_entries_fallback(&state.db).await,
+    };
+
+    let path = std::path::Path::new(&pihole_path);
+    if !path.exists() {
+        return get_dns_entries_fallback(&state.db).await;
+    }
+
+    match tokio::fs::read_to_string(path).await {
+        Ok(content) => {
+            match toml::from_str::<pihole::PiholeConfig>(&content) {
+                Ok(config) => {
+                    let mut entries = Vec::new();
+                    if let Some(dns_sec) = config.dns {
+                        if let Some(hosts) = dns_sec.hosts {
+                            for (idx, host_line) in hosts.iter().enumerate() {
+                                let parts: Vec<&str> = host_line.split_whitespace().collect();
+                                if parts.len() >= 2 {
+                                    let ip = parts[0].to_string();
+                                    let domain = parts[1].to_string();
+                                    entries.push(DnsEntry {
+                                        id: format!("dns-toml-{}", idx),
+                                        ip,
+                                        domain,
+                                        active: true,
+                                        source: "hosts".to_string(),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    Json(entries).into_response()
+                }
+                Err(_) => get_dns_entries_fallback(&state.db).await,
+            }
+        }
+        Err(_) => get_dns_entries_fallback(&state.db).await,
+    }
+}
+
+async fn get_dns_entries_fallback(db: &SqlitePool) -> axum::response::Response {
     let rows = match sqlx::query("SELECT id, ip, domain, active, source FROM dns_entries")
-        .fetch_all(&state.db)
+        .fetch_all(db)
         .await
     {
         Ok(r) => r,
@@ -928,10 +1315,27 @@ pub async fn delete_dns_entry(
         ).into_response();
     }
 
+    let domain: String = entry.get("domain");
+
+    // Remover do pihole.toml em background
+    let pihole_path_res = sqlx::query("SELECT value FROM system_config WHERE key = 'pihole_path'")
+        .fetch_optional(&state.db)
+        .await;
+    
+    if let Ok(Some(row)) = pihole_path_res {
+        let path = row.get::<String, _>(0);
+        if !path.is_empty() {
+            let domain_clone = domain.clone();
+            tokio::spawn(async move {
+                let _ = pihole::remove_dns_host(&path, &domain_clone).await;
+            });
+        }
+    }
+
     let removed = DnsEntry {
         id: entry.get("id"),
         ip: entry.get("ip"),
-        domain: entry.get("domain"),
+        domain,
         active: entry.get::<i32, _>("active") == 1,
         source: entry.get("source"),
     };
@@ -1098,7 +1502,11 @@ async fn execute_pipeline_task(state: Arc<AppState>, pipeline_id: String, payloa
     // Obter IP local da governança e caminho do pihole
     let local_ip = get_config_val(&state.db, "local_ip").await.unwrap_or_else(|| "127.0.0.1".to_string());
     let pihole_path = get_config_val(&state.db, "pihole_path").await.unwrap_or_else(|| "".to_string());
-    let npm_token = get_config_val(&state.db, "npm_token").await.unwrap_or_default();
+    let npm_email = get_config_val(&state.db, "npm_email").await.unwrap_or_else(|| "admin@example.com".to_string());
+    let mut npm_password = get_config_val(&state.db, "npm_password").await.unwrap_or_default();
+    if npm_password.is_empty() {
+        npm_password = get_config_val(&state.db, "npm_token").await.unwrap_or_default();
+    }
 
     wait(1000).await;
 
@@ -1151,7 +1559,7 @@ async fn execute_pipeline_task(state: Arc<AppState>, pipeline_id: String, payloa
         wait(1200).await;
 
         // Auto-login do NPM e criação do proxy
-        match npm::create_proxy_host(&local_ip, 81, "admin@example.com", &npm_token, vec![payload.subdomain.clone()], "http", &payload.ip, payload.port, true).await {
+        match npm::create_proxy_host(&local_ip, 81, &npm_email, &npm_password, vec![payload.subdomain.clone()], "http", &payload.ip, payload.port, true).await {
             Ok(n_id) => {
                 add_log(&state.db, &pipeline_id, "success", &format!("Proxy Host criado no Nginx Proxy Manager com ID {}.", n_id), None).await;
                 add_log(&state.db, &pipeline_id, "info", "Iniciando desafio SSL Let's Encrypt para geração de chave criptografada de 4096-Bits...", None).await;
@@ -1194,8 +1602,39 @@ async fn execute_pipeline_task(state: Arc<AppState>, pipeline_id: String, payloa
         add_log(&state.db, &pipeline_id, "info", &format!("Disparando criação de container com imagem docker '{}'...", image_name), None).await;
         wait(1300).await;
 
-        let d_id = format!("docker-{}", destructure_id());
-        add_log(&state.db, &pipeline_id, "success", &format!("Container criado com ID: {}.", d_id), None).await;
+        let mut d_id = format!("docker-{}", destructure_id());
+        
+        // Executar docker run real no host
+        let d_run = tokio::process::Command::new("docker")
+            .args(&[
+                "run", "-d",
+                "--name", &container_name,
+                "-p", &format!("{}:{}", payload.port, payload.port),
+                "--network", "proxy-network", // Mesma rede privada do NPM
+                "--label", &format!("homelab.description={}", payload.description.as_deref().unwrap_or("")),
+                "--label", &format!("homelab.category={}", payload.category.as_deref().unwrap_or("")),
+                "--label", &format!("homelab.domain={}", payload.subdomain),
+                image_name
+            ])
+            .output()
+            .await;
+
+        match d_run {
+            Ok(out) if out.status.success() => {
+                let stdout_id = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if !stdout_id.is_empty() {
+                    d_id = stdout_id[..12.min(stdout_id.len())].to_string();
+                    add_log(&state.db, &pipeline_id, "success", &format!("Container criado com sucesso no host com ID: {}.", d_id), None).await;
+                }
+            }
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                add_log(&state.db, &pipeline_id, "warn", &format!("docker run retornou erro: {}. Gerando ID de fallback virtual.", stderr), None).await;
+            }
+            Err(e) => {
+                add_log(&state.db, &pipeline_id, "warn", &format!("Falha ao invocar docker run: {}. Gerando ID de fallback virtual.", e), None).await;
+            }
+        }
         
         add_log(&state.db, &pipeline_id, "info", "Configurando labels personalizadas da sua receita dockercompose:", None).await;
         add_log(&state.db, &pipeline_id, "info", &format!(" - \"homelab.description={}\"", payload.description.as_deref().unwrap_or("")), None).await;
@@ -1212,7 +1651,7 @@ async fn execute_pipeline_task(state: Arc<AppState>, pipeline_id: String, payloa
         let ports_vec = vec![format!("{}:{}", payload.port, payload.port)];
         let ports_str = serde_json::to_string(&ports_vec).unwrap_or_default();
 
-        let _ = sqlx::query("INSERT INTO containers (id, name, image, status, created, ports, cpu, memory, labels) VALUES (?, ?, ?, 'running', ?, ?, 0.9, '110MB', ?)")
+        let _ = sqlx::query("INSERT INTO containers (id, name, image, status, created, ports, cpu, memory, labels) VALUES (?, ?, ?, 'running', ?, ?, 0.0, '0MB', ?)")
             .bind(&d_id)
             .bind(&container_name)
             .bind(image_name)
@@ -1304,7 +1743,7 @@ pub struct SystemStatsResponse {
 }
 
 pub async fn get_system_stats(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    // Contar containers ativos
+    // 1. Contar containers ativos e registros
     let active_containers = match sqlx::query("SELECT COUNT(*) FROM containers WHERE status = 'running'")
         .fetch_one(&state.db)
         .await
@@ -1329,36 +1768,251 @@ pub async fn get_system_stats(State(state): State<Arc<AppState>>) -> impl IntoRe
         _ => 0,
     };
 
-    // Simular flutuação ligeira
-    let running_count = active_containers;
-    let cpu_var = rand_flutuation() * 4.0 - 2.0;
-    let current_cpu = (12.5 + cpu_var + (running_count as f64 * 1.5)).max(2.0).min(95.0) as i32;
-
-    let ram_total = 16.0;
-    let ram_base = 4.2 + (running_count as f64 * 0.42);
-    let ram_var = rand_flutuation() * 0.2 - 0.1;
-    let current_ram_used = (ram_base + ram_var).max(1.0).min(ram_total);
-    let ram_pct = ((current_ram_used / ram_total) * 100.0) as i32;
-
-    let net_rx = (150.0 + rand_flutuation() * 850.0 + (running_count as f64 * 45.0)) as i32;
-    let net_tx = (80.0 + rand_flutuation() * 400.0 + (running_count as f64 * 25.0)) as i32;
+    // 2. Coletar Telemetrias Reais do Host
+    let cpu_usage = get_real_cpu_usage().await;
+    let cpu_model = get_real_cpu_model().await;
+    let ram = get_real_ram_stats().await;
+    let disk = get_real_disk_stats().await;
+    let uptime = get_real_uptime().await;
+    let (net_rx, net_tx) = get_real_network_rates().await;
 
     Json(SystemStatsResponse {
-        cpu_usage: current_cpu,
-        cpu_model: "Intel Xeon E-2276G @ 3.80GHz (6 Cores / 12 Threads)".to_string(),
-        ram_usage: ram_pct,
-        ram_total,
-        ram_used: ((current_ram_used * 100.0).round() / 100.0),
-        disk_usage: 45,
-        disk_total: 960,
-        disk_used: 432,
-        uptime: "14 dias, 5 horas, 28 minutos".to_string(),
+        cpu_usage,
+        cpu_model,
+        ram_usage: ram.pct,
+        ram_total: ram.total_gb,
+        ram_used: ram.used_gb,
+        disk_usage: disk.pct,
+        disk_total: disk.total_gb,
+        disk_used: disk.used_gb,
+        uptime,
         active_containers,
         npm_hosts_count,
         dns_records_count,
         network_rx: net_rx,
         network_tx: net_tx,
     })
+}
+
+// ----------------------------------------------------
+// TELEMETRY HELPERS (Real-time Host stats)
+// ----------------------------------------------------
+
+async fn get_real_cpu_model() -> String {
+    if let Ok(content) = tokio::fs::read_to_string("/proc/cpuinfo").await {
+        for line in content.lines() {
+            if line.starts_with("model name") {
+                if let Some(pos) = line.find(':') {
+                    return line[pos + 1..].trim().to_string();
+                }
+            }
+        }
+    }
+    "Intel Core / Xeon (Homelab CPU)".to_string()
+}
+
+async fn get_real_uptime() -> String {
+    if let Ok(content) = tokio::fs::read_to_string("/proc/uptime").await {
+        if let Some(first_word) = content.split_whitespace().next() {
+            if let Ok(seconds_f) = first_word.parse::<f64>() {
+                let seconds = seconds_f as u64;
+                let days = seconds / 86400;
+                let hours = (seconds % 86400) / 3600;
+                let minutes = (seconds % 3600) / 60;
+                
+                let mut parts = Vec::new();
+                if days > 0 {
+                    parts.push(format!("{} dia{}", days, if days > 1 { "s" } else { "" }));
+                }
+                if hours > 0 {
+                    parts.push(format!("{} hora{}", hours, if hours > 1 { "s" } else { "" }));
+                }
+                parts.push(format!("{} minuto{}", minutes, if minutes > 1 { "s" } else { "" }));
+                return parts.join(", ");
+            }
+        }
+    }
+    "Desconhecido".to_string()
+}
+
+struct RamTelemetry {
+    total_gb: f64,
+    used_gb: f64,
+    pct: i32,
+}
+
+async fn get_real_ram_stats() -> RamTelemetry {
+    let mut mem_total = 0.0;
+    let mut mem_available = 0.0;
+    
+    if let Ok(content) = tokio::fs::read_to_string("/proc/meminfo").await {
+        for line in content.lines() {
+            if line.starts_with("MemTotal:") {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    if let Ok(val) = parts[1].parse::<f64>() {
+                        mem_total = val; // em kB
+                    }
+                }
+            } else if line.starts_with("MemAvailable:") {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    if let Ok(val) = parts[1].parse::<f64>() {
+                        mem_available = val; // em kB
+                    }
+                }
+            }
+        }
+    }
+
+    if mem_total > 0.0 {
+        if mem_available == 0.0 {
+            mem_available = mem_total * 0.5; // fallback
+        }
+        let total_gb = mem_total / 1024.0 / 1024.0;
+        let available_gb = mem_available / 1024.0 / 1024.0;
+        let used_gb = total_gb - available_gb;
+        let pct = ((used_gb / total_gb) * 100.0) as i32;
+        RamTelemetry {
+            total_gb: (total_gb * 100.0).round() / 100.0,
+            used_gb: (used_gb * 100.0).round() / 100.0,
+            pct: pct.max(0).min(100),
+        }
+    } else {
+        RamTelemetry { total_gb: 16.0, used_gb: 4.2, pct: 26 }
+    }
+}
+
+struct DiskTelemetry {
+    total_gb: i32,
+    used_gb: i32,
+    pct: i32,
+}
+
+async fn get_real_disk_stats() -> DiskTelemetry {
+    let output = tokio::process::Command::new("df")
+        .args(&["-k", "/app/data"])
+        .output()
+        .await;
+
+    if let Ok(out) = output {
+        if out.status.success() {
+            let stdout_str = String::from_utf8_lossy(&out.stdout);
+            let lines: Vec<&str> = stdout_str.lines().collect();
+            if lines.len() >= 2 {
+                let parts: Vec<&str> = lines[1].split_whitespace().collect();
+                if parts.len() >= 5 {
+                    if let (Ok(total_kb), Ok(used_kb)) = (parts[1].parse::<f64>(), parts[2].parse::<f64>()) {
+                        let total_gb = (total_kb / 1024.0 / 1024.0) as i32;
+                        let used_gb = (used_kb / 1024.0 / 1024.0) as i32;
+                        let pct = if total_gb > 0 {
+                            ((used_gb as f64 / total_gb as f64) * 100.0) as i32
+                        } else {
+                            0
+                        };
+                        return DiskTelemetry {
+                            total_gb,
+                            used_gb,
+                            pct: pct.max(0).min(100),
+                        };
+                    }
+                }
+            }
+        }
+    }
+    DiskTelemetry { total_gb: 480, used_gb: 120, pct: 25 }
+}
+
+struct CpuSample {
+    idle: u64,
+    total: u64,
+}
+
+async fn read_cpu_sample() -> Option<CpuSample> {
+    if let Ok(content) = tokio::fs::read_to_string("/proc/stat").await {
+        if let Some(line) = content.lines().next() {
+            if line.starts_with("cpu ") {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 9 {
+                    let user = parts[1].parse::<u64>().unwrap_or(0);
+                    let nice = parts[2].parse::<u64>().unwrap_or(0);
+                    let system = parts[3].parse::<u64>().unwrap_or(0);
+                    let idle = parts[4].parse::<u64>().unwrap_or(0);
+                    let iowait = parts[5].parse::<u64>().unwrap_or(0);
+                    let irq = parts[6].parse::<u64>().unwrap_or(0);
+                    let softirq = parts[7].parse::<u64>().unwrap_or(0);
+                    let steal = parts[8].parse::<u64>().unwrap_or(0);
+                    
+                    let idle_total = idle + iowait;
+                    let non_idle = user + nice + system + irq + softirq + steal;
+                    let total = idle_total + non_idle;
+                    return Some(CpuSample { idle: idle_total, total });
+                }
+            }
+        }
+    }
+    None
+}
+
+async fn get_real_cpu_usage() -> i32 {
+    if let Some(s1) = read_cpu_sample().await {
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        if let Some(s2) = read_cpu_sample().await {
+            let total_diff = s2.total.saturating_sub(s1.total);
+            let idle_diff = s2.idle.saturating_sub(s1.idle);
+            if total_diff > 0 {
+                let usage = ((total_diff - idle_diff) as f64 / total_diff as f64 * 100.0) as i32;
+                return usage.max(0).min(100);
+            }
+        }
+    }
+    12
+}
+
+async fn read_net_accumulated_bytes() -> Option<(u64, u64)> {
+    if let Ok(content) = tokio::fs::read_to_string("/proc/net/dev").await {
+        let mut total_rx = 0;
+        let mut total_tx = 0;
+        for line in content.lines().skip(2) {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 10 {
+                let rx_str = if parts[0].contains(':') {
+                    parts[0].split(':').nth(1).unwrap_or("")
+                } else {
+                    parts[1]
+                };
+                let tx_str = if parts[0].contains(':') {
+                    parts[8]
+                } else {
+                    parts[9]
+                };
+                
+                if let Ok(rx) = rx_str.parse::<u64>() {
+                    total_rx += rx;
+                }
+                if let Ok(tx) = tx_str.parse::<u64>() {
+                    total_tx += tx;
+                }
+            }
+        }
+        return Some((total_rx, total_tx));
+    }
+    None
+}
+
+async fn get_real_network_rates() -> (i32, i32) {
+    if let Some((rx1, tx1)) = read_net_accumulated_bytes().await {
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        if let Some((rx2, tx2)) = read_net_accumulated_bytes().await {
+            let rx_diff = rx2.saturating_sub(rx1);
+            let tx_diff = tx2.saturating_sub(tx1);
+            // 100ms para 1s (multiplica por 10), e Bytes para KB (divide por 1024)
+            let rx_kb_s = (rx_diff as f64 * 10.0 / 1024.0) as i32;
+            let tx_kb_s = (tx_diff as f64 * 10.0 / 1024.0) as i32;
+            return (rx_kb_s.max(1), tx_kb_s.max(1));
+        }
+    }
+    (145, 75)
 }
 
 // ----------------------------------------------------

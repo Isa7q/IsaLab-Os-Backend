@@ -90,3 +90,59 @@ pub async fn add_dns_host(path_str: &str, ip: &str, domain: &str) -> Result<(), 
         }
     }
 }
+
+/// Lê e remove um host do pihole.toml
+pub async fn remove_dns_host(path_str: &str, domain: &str) -> Result<(), String> {
+    let path = Path::new(path_str);
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let content = fs::read_to_string(path)
+        .await
+        .map_err(|e| format!("Falha ao ler o arquivo pihole.toml: {}", e))?;
+    
+    let mut config = toml::from_str::<PiholeConfig>(&content)
+        .map_err(|e| format!("Falha ao parsear pihole.toml: {}", e))?;
+
+    if let Some(dns_sec) = config.dns.as_mut() {
+        if let Some(hosts) = dns_sec.hosts.as_mut() {
+            hosts.retain(|h| {
+                let parts: Vec<&str> = h.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    parts[1] != domain
+                } else {
+                    true
+                }
+            });
+        }
+    }
+
+    let updated_content = toml::to_string_pretty(&config)
+        .map_err(|e| format!("Falha ao serializar pihole.toml: {}", e))?;
+
+    fs::write(path, updated_content)
+        .await
+        .map_err(|e| format!("Falha ao escrever no pihole.toml: {}", e))?;
+
+    let output = Command::new("pihole")
+        .arg("restartdns")
+        .output()
+        .await;
+
+    match output {
+        Ok(out) => {
+            if out.status.success() {
+                Ok(())
+            } else {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                Err(format!("pihole restartdns retornou erro: {}", stderr))
+            }
+        }
+        Err(e) => {
+            println!("Aviso: Comando 'pihole' não encontrado no sistema ao remover host: {}.", e);
+            Ok(())
+        }
+    }
+}
+
