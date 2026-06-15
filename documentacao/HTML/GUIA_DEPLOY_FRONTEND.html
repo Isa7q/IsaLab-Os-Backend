@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IsaLab OS - Guia de Deploy do Frontend com Docker</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-main: #070a13;
+            --bg-card: #0f172a;
+            --bg-code: #020617;
+            --border-color: rgba(255, 255, 255, 0.06);
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --primary: #10b981;
+            --primary-gradient: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            --accent: #6366f1;
+            --accent-gradient: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+            --danger: #f43f5e;
+            --warning: #eab308;
+            --shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.7);
+            --radius: 16px;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-main);
+            color: var(--text-main);
+            line-height: 1.6;
+            padding: 0;
+            overflow-x: hidden;
+        }
+
+        .wrapper {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 50px 20px;
+        }
+
+        header {
+            background: var(--primary-gradient);
+            padding: 50px;
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            margin-bottom: 40px;
+            position: relative;
+            overflow: hidden;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+
+        header::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            right: 0;
+            bottom: 0;
+            left: 0;
+            background: linear-gradient(rgba(0,0,0,0) 0%, rgba(0,0,0,0.4) 100%);
+            pointer-events: none;
+        }
+
+        .header-content {
+            position: relative;
+            z-index: 2;
+        }
+
+        .badge {
+            background: rgba(0, 0, 0, 0.35);
+            color: var(--primary);
+            padding: 6px 16px;
+            border-radius: 50px;
+            font-size: 0.8rem;
+            font-weight: 700;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            display: inline-block;
+            margin-bottom: 15px;
+            border: 1px solid rgba(16, 185, 129, 0.25);
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            font-weight: 800;
+            margin-bottom: 15px;
+            letter-spacing: -1px;
+        }
+
+        .subtitle {
+            font-size: 1.15rem;
+            color: #e2e8f0;
+            font-weight: 300;
+        }
+
+        section {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius);
+            padding: 35px;
+            margin-bottom: 30px;
+            box-shadow: var(--shadow);
+            transition: border-color 0.25s ease;
+        }
+
+        section:hover {
+            border-color: rgba(16, 185, 129, 0.2);
+        }
+
+        h2 {
+            font-size: 1.6rem;
+            font-weight: 700;
+            margin-bottom: 25px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: #fff;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            padding-bottom: 15px;
+        }
+
+        h2::before {
+            content: '';
+            display: inline-block;
+            width: 4px;
+            height: 22px;
+            background: var(--primary-gradient);
+            border-radius: 4px;
+        }
+
+        h3 {
+            font-size: 1.2rem;
+            font-weight: 600;
+            margin: 25px 0 12px 0;
+            color: #f1f5f9;
+        }
+
+        p {
+            color: var(--text-muted);
+            margin-bottom: 15px;
+            font-size: 0.98rem;
+        }
+
+        ul {
+            list-style-position: inside;
+            color: var(--text-muted);
+            margin-bottom: 20px;
+            padding-left: 10px;
+        }
+
+        li {
+            margin-bottom: 8px;
+        }
+
+        li strong {
+            color: #fff;
+        }
+
+        /* Code Block Styling */
+        .code-container {
+            margin: 20px 0;
+            background-color: var(--bg-code);
+            border-radius: 10px;
+            border: 1px solid var(--border-color);
+            overflow: hidden;
+        }
+
+        .code-header {
+            background-color: rgba(255, 255, 255, 0.02);
+            padding: 12px 20px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.82rem;
+            color: var(--text-muted);
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .code-header .dots {
+            display: flex;
+            gap: 6px;
+        }
+
+        .code-header .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+
+        .code-header .dot.red { background-color: var(--danger); }
+        .code-header .dot.yellow { background-color: var(--warning); }
+        .code-header .dot.green { background-color: var(--primary); }
+
+        pre {
+            padding: 20px;
+            overflow-x: auto;
+            margin: 0;
+        }
+
+        code {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.88rem;
+            color: #34d399; /* Emerald color for code highlight */
+        }
+
+        .callout {
+            border-left: 4px solid var(--primary);
+            background: rgba(16, 185, 129, 0.03);
+            padding: 20px;
+            border-radius: 0 var(--radius) var(--radius) 0;
+            margin: 25px 0;
+            border-top: 1px solid var(--border-color);
+            border-right: 1px solid var(--border-color);
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .callout.accent {
+            border-left-color: var(--accent);
+            background: rgba(99, 102, 241, 0.03);
+        }
+
+        .callout h5 {
+            font-size: 1.05rem;
+            font-weight: 700;
+            margin-bottom: 6px;
+            color: #fff;
+        }
+
+        .step-num {
+            background: var(--accent-gradient);
+            color: #fff;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            font-size: 0.85rem;
+            font-weight: 700;
+            margin-right: 10px;
+        }
+
+        footer {
+            text-align: center;
+            padding: 40px 0;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            border-top: 1px solid var(--border-color);
+            margin-top: 60px;
+        }
+
+        footer strong {
+            color: #fff;
+        }
+    </style>
+</head>
+<body>
+    <div class="wrapper">
+        <header>
+            <div class="header-content">
+                <span class="badge">Deploy Frontend</span>
+                <h1>Guia de Produção: Frontend em Docker</h1>
+                <div class="subtitle">Processo de build autônomo multi-estágio e distribuição estática otimizada via Nginx.</div>
+            </div>
+        </header>
+
+        <!-- Arquitetura do Build -->
+        <section>
+            <h2>Como Funciona o Build</h2>
+            <p>O deploy de produção do frontend (Vite + React + TypeScript + TailwindCSS) utiliza o padrão <strong>Docker Multi-stage</strong>. Esse padrão divide o empacotamento em dois momentos bem definidos:</p>
+            
+            <ul>
+                <li><strong>Estágio 1 (Builder):</strong> Usa uma imagem completa com Node.js para instalar as dependências de desenvolvimento, compilar as fontes TSX e otimizar os assets, gerando um build puramente estático em HTML/JS na pasta <code>dist</code>.</li>
+                <li><strong>Estágio 2 (Runtime):</strong> Copia apenas os arquivos gerados em <code>dist</code> para uma imagem pura de Nginx Alpine, descartando o Node e os módulos instalados, resultando em uma imagem final extremamente leve e segura de apenas <strong>~45MB</strong>.</li>
+            </ul>
+
+            <div class="callout">
+                <h5>Vantagem da Abordagem Autônoma</h5>
+                <p>O host do Homelab não precisa ter o Node instalado nem rodar comandos locais de compilação. Todo o ciclo ocorre de forma isolada dentro do Docker durante a execução do comando compose, garantindo reprodutibilidade idêntica.</p>
+            </div>
+        </section>
+
+        <!-- Arquivos Criados -->
+        <section>
+            <h2>Arquivos de Infraestrutura Criados</h2>
+            <p>Abaixo estão os arquivos específicos criados na pasta <code>/app/isalab-os/frontend</code> para operacionalizar esse fluxo:</p>
+
+            <h3>1. Dockerfile do Frontend</h3>
+            <p>Define as etapas de compilação com Node 20 e distribuição com Nginx.</p>
+            <div class="code-container">
+                <div class="code-header">
+                    <div class="dots">
+                        <span class="dot red"></span>
+                        <span class="dot yellow"></span>
+                        <span class="dot green"></span>
+                    </div>
+                    <span>frontend/Dockerfile</span>
+                </div>
+                <pre><code># Stage 1: Build da SPA
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+# Copiar arquivos de manifesto de dependências
+COPY package.json package-lock.json ./
+
+# Instalar dependências (incluindo devDependencies necessárias para o build)
+RUN npm ci
+
+# Copiar código fonte e configurações do projeto
+COPY . .
+
+# Compilar o build estático de produção do React/Vite
+RUN npm run build
+
+# Stage 2: Runtime com Nginx Alpine leve
+FROM nginx:alpine AS runtime
+
+# Copiar os binários compilados (dist) do estágio de build para o diretório padrão do Nginx
+COPY --from=builder /app/dist /usr/share/nginx/html
+
+# Copiar a configuração customizada do Nginx contendo a regra de proxy reverso da API
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]</code></pre>
+            </div>
+
+            <h3>2. O arquivo .dockerignore</h3>
+            <p>Evita o envio de arquivos de build do host para dentro do container, acelerando a inicialização do build.</p>
+            <div class="code-container">
+                <div class="code-header">
+                    <div class="dots">
+                        <span class="dot red"></span>
+                        <span class="dot yellow"></span>
+                        <span class="dot green"></span>
+                    </div>
+                    <span>frontend/.dockerignore</span>
+                </div>
+                <pre><code>node_modules
+dist
+.git
+.gitignore
+.env
+.env.example
+README.md
+FRONTEND_GUIDE.md
+GUIA_FRONTEND.html</code></pre>
+            </div>
+
+            <h3>3. Nginx do Frontend (nginx.conf)</h3>
+            <p>Configura o roteamento de páginas do SPA (React Router) e o túnel de comunicação local para a API.</p>
+            <div class="code-container">
+                <div class="code-header">
+                    <div class="dots">
+                        <span class="dot red"></span>
+                        <span class="dot yellow"></span>
+                        <span class="dot green"></span>
+                    </div>
+                    <span>frontend/nginx.conf</span>
+                </div>
+                <pre><code>server {
+    listen 80;
+    server_name localhost;
+
+    location / {
+        root /usr/share/nginx/html;
+        index index.html index.htm;
+        try_files $uri $uri/ /index.html;
+    }
+
+    # Proxy para o backend Rust
+    location /api/ {
+        proxy_pass http://homelab-backend:3001/api/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+
+        # Configurações de timeout para operações longas (ex: pipelines)
+        proxy_connect_timeout 300s;
+        proxy_send_timeout 300s;
+        proxy_read_timeout 300s;
+    }
+}</code></pre>
+            </div>
+        </section>
+
+        <!-- Integração Compose -->
+        <section>
+            <h2>Integração com o Docker Compose</h2>
+            <p>O serviço do frontend é integrado no <code>docker-compose.yml</code> apontando para a pasta local como contexto de compilação:</p>
+            
+            <div class="code-container">
+                <div class="code-header"><span>Trecho do docker-compose.yml</span></div>
+                <pre><code>  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: homelab-frontend:latest
+    container_name: homelab-frontend
+    networks:
+      - proxy-network
+    restart: always</code></pre>
+            </div>
+
+            <div class="callout accent">
+                <h5>Roteamento Invisível</h5>
+                <p>Nenhuma porta do frontend é exposta no host local (ex: 80 ou 3000). O Nginx Proxy Manager (NPM), que também roda na rede <code>proxy-network</code>, busca o frontend apontando diretamente para o domínio de container interno: <code>http://homelab-frontend:80</code>.</p>
+            </div>
+        </section>
+
+        <!-- Comandos de Operação -->
+        <section>
+            <h2>Comandos de Operação Rápidos</h2>
+            <p>Instruções rápidas para manipulação e reconstrução do container do frontend:</p>
+
+            <div class="code-container">
+                <div class="code-header"><span>Terminal</span></div>
+                <pre><code># Reconstruir apenas a imagem do frontend e reiniciar o container
+docker compose up -d --build frontend
+
+# Verificar se o container está no ar de forma saudável
+docker ps --filter "name=homelab-frontend"
+
+# Ler logs do servidor Nginx do frontend
+docker logs -f homelab-frontend</code></pre>
+            </div>
+        </section>
+
+        <footer>
+            <p>Manual técnico elaborado para o ecossistema <strong>IsaLab OS</strong> &copy; 2026.</p>
+        </footer>
+    </div>
+</body>
+</html>

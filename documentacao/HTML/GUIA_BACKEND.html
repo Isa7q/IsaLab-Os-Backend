@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="Guia técnico e especificação de endpoints da API em Rust Axum para integração com o frontend do IsaLab Homelab OS.">
     <title>Guia de Integração e APIs - IsaLab Homelab OS</title>
-    <!-- Fonte Inter do Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
@@ -37,26 +36,27 @@
             background-color: var(--bg-color);
             color: var(--text-main);
             line-height: 1.6;
-            padding: 40px 20px;
+            padding: 20px 15px; /* Reduzido para mobile */
         }
 
         .container {
+            width: 100%;
             max-width: 1000px;
             margin: 0 auto;
         }
 
         header {
             text-align: center;
-            margin-bottom: 50px;
+            margin-bottom: 35px;
             border-bottom: 1px solid var(--border-color);
-            padding-bottom: 30px;
+            padding-bottom: 25px;
         }
 
         h1 {
-            font-size: 2.5rem;
+            font-size: 1.8rem; /* Mobile-first size */
             font-weight: 800;
             color: #ffffff;
-            margin-bottom: 10px;
+            margin-bottom: 12px;
             letter-spacing: -0.025em;
             background: linear-gradient(to right, #ffffff, #60a5fa, #34d399);
             -webkit-background-clip: text;
@@ -64,26 +64,26 @@
         }
 
         .subtitle {
-            font-size: 1.1rem;
+            font-size: 0.95rem;
             color: var(--text-muted);
             font-weight: 400;
         }
 
         h2 {
-            font-size: 1.75rem;
+            font-size: 1.4rem;
             color: #ffffff;
-            margin-top: 40px;
-            margin-bottom: 20px;
+            margin-top: 35px;
+            margin-bottom: 15px;
             border-left: 4px solid var(--primary);
-            padding-left: 15px;
+            padding-left: 12px;
             letter-spacing: -0.02em;
         }
 
         h3 {
-            font-size: 1.25rem;
+            font-size: 1.15rem;
             color: #ffffff;
-            margin-top: 25px;
-            margin-bottom: 15px;
+            margin-top: 20px;
+            margin-bottom: 12px;
             display: flex;
             align-items: center;
             gap: 10px;
@@ -92,68 +92,51 @@
         p {
             color: var(--text-main);
             margin-bottom: 15px;
-            font-size: 1rem;
+            font-size: 0.95rem;
         }
 
         ul, ol {
             margin-bottom: 20px;
-            padding-left: 25px;
+            padding-left: 20px;
             color: var(--text-main);
+            font-size: 0.95rem;
         }
 
         li {
             margin-bottom: 8px;
         }
 
-        /* Badge Estilos */
+        /* Badges */
         .badge {
             display: inline-block;
-            padding: 4px 10px;
+            padding: 4px 8px;
             border-radius: 4px;
-            font-size: 0.75rem;
+            font-size: 0.7rem;
             font-weight: 700;
             text-transform: uppercase;
             letter-spacing: 0.05em;
+            white-space: nowrap;
         }
 
-        .badge-get {
-            background-color: rgba(59, 130, 246, 0.2);
-            color: #60a5fa;
-            border: 1px solid rgba(59, 130, 246, 0.3);
-        }
+        .badge-get { background-color: rgba(59, 130, 246, 0.2); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3); }
+        .badge-post { background-color: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
+        .badge-put { background-color: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
+        .badge-delete { background-color: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
 
-        .badge-post {
-            background-color: rgba(16, 185, 129, 0.2);
-            color: #34d399;
-            border: 1px solid rgba(16, 185, 129, 0.3);
-        }
-
-        .badge-put {
-            background-color: rgba(245, 158, 11, 0.2);
-            color: #fbbf24;
-            border: 1px solid rgba(245, 158, 11, 0.3);
-        }
-
-        .badge-delete {
-            background-color: rgba(239, 68, 68, 0.2);
-            color: #f87171;
-            border: 1px solid rgba(239, 68, 68, 0.3);
-        }
-
-        /* Alertas visuais */
+        /* Alertas */
         .alert {
             background-color: var(--card-bg);
             border-left: 4px solid var(--accent);
-            padding: 15px 20px;
+            padding: 15px;
             border-radius: 4px;
             margin-bottom: 25px;
-            color: var(--text-main);
         }
 
         .alert-title {
             font-weight: 700;
-            margin-bottom: 5px;
+            margin-bottom: 6px;
             color: #ffffff;
+            font-size: 0.95rem;
         }
 
         /* Cartões de APIs */
@@ -161,21 +144,16 @@
             background-color: var(--card-bg);
             border: 1px solid var(--border-color);
             border-radius: 8px;
-            padding: 24px;
-            margin-bottom: 25px;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-            transition: transform 0.2s ease, border-color 0.2s ease;
-        }
-
-        .api-card:hover {
-            transform: translateY(-2px);
-            border-color: rgba(59, 130, 246, 0.4);
+            padding: 16px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
         }
 
         .api-header {
             display: flex;
-            align-items: center;
-            justify-content: space-between;
+            flex-direction: column; /* Stacked no mobile por padrão */
+            align-items: flex-start;
+            gap: 10px;
             margin-bottom: 15px;
             border-bottom: 1px solid var(--border-color);
             padding-bottom: 12px;
@@ -183,39 +161,43 @@
 
         .api-route {
             font-family: 'JetBrains Mono', monospace;
-            font-size: 1.1rem;
+            font-size: 0.95rem;
             font-weight: 600;
             color: #ffffff;
             display: flex;
             align-items: center;
-            gap: 12px;
+            gap: 10px;
+            flex-wrap: wrap; /* Evita quebra feia se a rota for longa */
         }
 
         .api-desc {
             color: var(--text-muted);
-            font-size: 0.95rem;
+            font-size: 0.9rem;
             margin-bottom: 15px;
         }
 
-        /* Codeblock styling */
+        /* Codeblocks */
         pre {
             background-color: var(--code-bg);
             border: 1px solid var(--border-color);
             border-radius: 6px;
-            padding: 16px;
+            padding: 12px;
             overflow-x: auto;
             margin-bottom: 15px;
             font-family: 'JetBrains Mono', monospace;
-            font-size: 0.9rem;
+            font-size: 0.85rem;
+            /* Melhora a rolagem em touchscreens */
+            -webkit-overflow-scrolling: touch; 
         }
 
         code {
             font-family: 'JetBrains Mono', monospace;
             color: #38bdf8;
+            word-break: break-word;
         }
 
         .code-title {
-            font-size: 0.8rem;
+            font-size: 0.75rem;
             text-transform: uppercase;
             color: var(--text-muted);
             margin-bottom: 6px;
@@ -223,40 +205,71 @@
             letter-spacing: 0.05em;
         }
 
-        /* Tabelas */
+        /* Responsividade para Tabelas (Wrapper Responsivo) */
+        .table-responsive {
+            width: 100%;
+            overflow-x: auto;
+            margin-top: 15px;
+            margin-bottom: 25px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            -webkit-overflow-scrolling: touch;
+        }
+
         table {
             width: 100%;
             border-collapse: collapse;
-            margin-top: 15px;
-            margin-bottom: 25px;
-            font-size: 0.95rem;
+            font-size: 0.85rem;
+            white-space: nowrap; /* Garante leitura linear com scroll horizontal */
         }
 
         th, td {
-            padding: 12px 16px;
+            padding: 10px 14px;
             text-align: left;
             border-bottom: 1px solid var(--border-color);
         }
 
         th {
-            background-color: rgba(30, 41, 66, 0.5);
+            background-color: rgba(30, 41, 66, 0.8);
             color: #ffffff;
             font-weight: 600;
         }
 
-        tr:hover {
-            background-color: rgba(30, 41, 66, 0.2);
-        }
-
-        /* Responsividade */
-        @media (max-width: 768px) {
+        /* Media Queries para Telas Maiores (Desktop-First Upgrades) */
+        @media (min-width: 768px) {
             body {
-                padding: 20px 10px;
+                padding: 40px 20px;
+            }
+            h1 {
+                font-size: 2.5rem;
+            }
+            .subtitle {
+                font-size: 1.1rem;
+            }
+            h2 {
+                font-size: 1.75rem;
+            }
+            p, ul, ol, .alert-title {
+                font-size: 1rem;
+            }
+            .api-card {
+                padding: 24px;
             }
             .api-header {
-                flex-direction: column;
-                align-items: flex-start;
-                gap: 10px;
+                flex-direction: row;
+                justify-content: space-between;
+                align-items: center;
+            }
+            .api-route {
+                font-size: 1.1rem;
+            }
+            table {
+                font-size: 0.95rem;
+                white-space: normal; /* Remove o nowrap em telas grandes */
+            }
+            .table-responsive {
+                border: none;
+                border-radius: 0;
             }
         }
     </style>
@@ -278,52 +291,53 @@
         <h2>1. Visão Geral e Inicialização</h2>
         <p>A API consome e altera o banco de dados SQLite persistente local <code>homelab.db</code>. Toda a autenticação é gerida via token <strong>JWT</strong> assinado em tempo de execução e as senhas do operador são tratadas com criptografia unidirecional <strong>Bcrypt</strong>.</p>
         
-        <table>
-            <thead>
-                <tr>
-                    <th>Método</th>
-                    <th>Rota</th>
-                    <th>Tipo</th>
-                    <th>Função</th>
-                </tr>
-            </thead>
-            <tbody>
-                <tr>
-                    <td><span class="badge badge-get">GET</span></td>
-                    <td>/api/status</td>
-                    <td>Público</td>
-                    <td>Verifica se o sistema já passou pelo setup/onboarding inicial.</td>
-                </tr>
-                <tr>
-                    <td><span class="badge badge-post">POST</span></td>
-                    <td>/api/onboard</td>
-                    <td>Público</td>
-                    <td>Salva os dados do onboarding inicial e gera a senha master.</td>
-                </tr>
-                <tr>
-                    <td><span class="badge badge-post">POST</span></td>
-                    <td>/api/auth/login</td>
-                    <td>Público</td>
-                    <td>Autentica o administrador e gera o token JWT.</td>
-                </tr>
-                <tr>
-                    <td><span class="badge badge-get">GET</span></td>
-                    <td>/api/services</td>
-                    <td>Público</td>
-                    <td>Lista todos os serviços cadastrados no diretório SQLite.</td>
-                </tr>
-                <tr>
-                    <td><span class="badge badge-post">POST</span></td>
-                    <td>/api/pipelines/run</td>
-                    <td>Protegido</td>
-                    <td>Dispara o fluxo de implantação assíncrono em background.</td>
-                </tr>
-            </tbody>
-        </table>
+        <div class="table-responsive">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Método</th>
+                        <th>Rota</th>
+                        <th>Tipo</th>
+                        <th>Função</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><span class="badge badge-get">GET</span></td>
+                        <td>/api/status</td>
+                        <td>Público</td>
+                        <td>Verifica se o sistema já passou pelo setup/onboarding inicial.</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge badge-post">POST</span></td>
+                        <td>/api/onboard</td>
+                        <td>Público</td>
+                        <td>Salva os dados do onboarding inicial e gera a senha master.</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge badge-post">POST</span></td>
+                        <td>/api/auth/login</td>
+                        <td>Público</td>
+                        <td>Autentica o administrador e gera o token JWT.</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge badge-get">GET</span></td>
+                        <td>/api/services</td>
+                        <td>Público</td>
+                        <td>Lista todos os serviços cadastrados no diretório SQLite.</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge badge-post">POST</span></td>
+                        <td>/api/pipelines/run</td>
+                        <td>Protegido</td>
+                        <td>Dispara o fluxo de implantação assíncrono em background.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
 
         <h2>2. Detalhamento de Endpoints</h2>
 
-        <!-- Status API -->
         <div class="api-card">
             <div class="api-header">
                 <div class="api-route">
@@ -343,7 +357,6 @@
 }</code></pre>
         </div>
 
-        <!-- Onboard API -->
         <div class="api-card">
             <div class="api-header">
                 <div class="api-route">
@@ -369,7 +382,6 @@
 }</code></pre>
         </div>
 
-        <!-- Login API -->
         <div class="api-card">
             <div class="api-header">
                 <div class="api-route">
@@ -397,7 +409,6 @@
 }</code></pre>
         </div>
 
-        <!-- Pipelines API -->
         <div class="api-card">
             <div class="api-header">
                 <div class="api-route">
@@ -446,7 +457,6 @@
     </div>
 
     <script>
-        // Unique ID de validação para testes de acessibilidade e estrutura
         document.getElementById("page-title").setAttribute("data-validated", "true");
     </script>
 </body>

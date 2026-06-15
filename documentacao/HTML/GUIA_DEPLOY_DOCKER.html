@@ -1,0 +1,701 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IsaLab OS - Guia de Deploy de Produção com Docker</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-main: #0b0f19;
+            --bg-card: #151d30;
+            --bg-code: #0a0e17;
+            --border-color: rgba(255, 255, 255, 0.08);
+            --text-main: #f1f5f9;
+            --text-muted: #94a3b8;
+            --primary: #6366f1;
+            --primary-gradient: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
+            --accent: #14b8a6;
+            --accent-gradient: linear-gradient(135deg, #14b8a6 0%, #0ea5e9 100%);
+            --danger: #ef4444;
+            --warning: #f59e0b;
+            --success: #10b981;
+            --shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
+            --radius: 12px;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-main);
+            color: var(--text-main);
+            line-height: 1.6;
+            padding: 0;
+            overflow-x: hidden;
+        }
+
+        /* Layout Container */
+        .wrapper {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+
+        /* Header Style */
+        header {
+            background: var(--primary-gradient);
+            padding: 60px 40px;
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            margin-bottom: 40px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        header::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 60%);
+            pointer-events: none;
+        }
+
+        .header-content {
+            position: relative;
+            z-index: 2;
+        }
+
+        .badge {
+            background: rgba(255, 255, 255, 0.2);
+            color: #fff;
+            padding: 6px 12px;
+            border-radius: 50px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            display: inline-block;
+            margin-bottom: 20px;
+            backdrop-filter: blur(5px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        h1 {
+            font-size: 2.8rem;
+            font-weight: 800;
+            margin-bottom: 15px;
+            letter-spacing: -1px;
+            background: linear-gradient(to right, #fff, #e2e8f0);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .subtitle {
+            font-size: 1.2rem;
+            color: rgba(255, 255, 255, 0.8);
+            font-weight: 300;
+            max-width: 800px;
+        }
+
+        /* Grid Layout */
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 30px;
+        }
+
+        @media (min-width: 900px) {
+            .grid {
+                grid-template-columns: 3fr 1fr;
+            }
+        }
+
+        /* Sections */
+        section {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius);
+            padding: 35px;
+            margin-bottom: 30px;
+            box-shadow: var(--shadow);
+            transition: transform 0.2s ease, border-color 0.2s ease;
+        }
+
+        section:hover {
+            border-color: rgba(99, 102, 241, 0.25);
+        }
+
+        h2 {
+            font-size: 1.8rem;
+            font-weight: 700;
+            margin-bottom: 25px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: #fff;
+        }
+
+        h2::before {
+            content: '';
+            display: inline-block;
+            width: 4px;
+            height: 24px;
+            background: var(--primary-gradient);
+            border-radius: 4px;
+        }
+
+        h3 {
+            font-size: 1.3rem;
+            font-weight: 600;
+            margin: 25px 0 15px 0;
+            color: #f8fafc;
+        }
+
+        p {
+            color: var(--text-muted);
+            margin-bottom: 20px;
+            font-size: 1rem;
+        }
+
+        /* Navigation Sidebar */
+        aside {
+            position: sticky;
+            top: 20px;
+            height: fit-content;
+        }
+
+        .nav-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius);
+            padding: 25px;
+            box-shadow: var(--shadow);
+        }
+
+        .nav-card h4 {
+            font-size: 1.1rem;
+            font-weight: 700;
+            margin-bottom: 15px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #f8fafc;
+        }
+
+        .nav-list {
+            list-style: none;
+        }
+
+        .nav-list li {
+            margin-bottom: 12px;
+        }
+
+        .nav-list a {
+            color: var(--text-muted);
+            text-decoration: none;
+            font-size: 0.95rem;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            transition: color 0.2s ease, padding-left 0.2s ease;
+        }
+
+        .nav-list a:hover {
+            color: var(--primary);
+            padding-left: 5px;
+        }
+
+        /* Port Mapping Table */
+        .table-responsive {
+            overflow-x: auto;
+            margin: 20px 0;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+            font-size: 0.95rem;
+        }
+
+        th {
+            background-color: rgba(255, 255, 255, 0.03);
+            color: #fff;
+            font-weight: 600;
+            padding: 15px 20px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        td {
+            padding: 15px 20px;
+            border-bottom: 1px solid var(--border-color);
+            color: var(--text-muted);
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        tr:hover td {
+            color: #fff;
+            background-color: rgba(255, 255, 255, 0.01);
+        }
+
+        /* Code Blocks */
+        .code-container {
+            margin: 20px 0;
+            background-color: var(--bg-code);
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            overflow: hidden;
+        }
+
+        .code-header {
+            background-color: rgba(255, 255, 255, 0.02);
+            padding: 10px 20px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .code-header .dots {
+            display: flex;
+            gap: 6px;
+        }
+
+        .code-header .dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+        }
+
+        .code-header .dot.red { background-color: var(--danger); }
+        .code-header .dot.yellow { background-color: var(--warning); }
+        .code-header .dot.green { background-color: var(--success); }
+
+        pre {
+            padding: 20px;
+            overflow-x: auto;
+            margin: 0;
+        }
+
+        code {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.9rem;
+            color: #38bdf8;
+        }
+
+        /* Alert/Callout Boxes */
+        .callout {
+            border-left: 4px solid var(--primary);
+            background: rgba(99, 102, 241, 0.05);
+            padding: 20px;
+            border-radius: 0 var(--radius) var(--radius) 0;
+            margin: 25px 0;
+        }
+
+        .callout.success {
+            border-left-color: var(--success);
+            background: rgba(16, 185, 129, 0.05);
+        }
+
+        .callout.warning {
+            border-left-color: var(--warning);
+            background: rgba(245, 158, 11, 0.05);
+        }
+
+        .callout h5 {
+            font-size: 1.05rem;
+            font-weight: 700;
+            margin-bottom: 8px;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        /* Flow Diagrams (HTML representations) */
+        .diagram {
+            background-color: var(--bg-code);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 25px;
+            margin: 25px 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .diagram-node {
+            background-color: var(--bg-card);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            padding: 12px 25px;
+            border-radius: 50px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            text-align: center;
+            min-width: 200px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+
+        .diagram-node.highlight {
+            background: var(--primary-gradient);
+            border: none;
+            color: #fff;
+        }
+
+        .diagram-node.accent {
+            background: var(--accent-gradient);
+            border: none;
+            color: #fff;
+        }
+
+        .diagram-arrow {
+            color: var(--text-muted);
+            font-weight: bold;
+            font-size: 1.2rem;
+        }
+
+        /* Status Pills */
+        .status-pill {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .status-pill.success {
+            background-color: rgba(16, 185, 129, 0.15);
+            color: var(--success);
+        }
+
+        .status-pill.info {
+            background-color: rgba(14, 165, 233, 0.15);
+            color: #0ea5e9;
+        }
+
+        /* Footer */
+        footer {
+            text-align: center;
+            padding: 40px 0;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            border-top: 1px solid var(--border-color);
+            margin-top: 50px;
+        }
+
+        footer strong {
+            color: #fff;
+        }
+    </style>
+</head>
+<body>
+    <div class="wrapper">
+        <header>
+            <div class="header-content">
+                <span class="badge">Deploy em Produção</span>
+                <h1>IsaLab OS</h1>
+                <div class="subtitle">Manual e Documentação Técnica de Arquitetura em Containers Docker com isolamento e segurança de portas.</div>
+            </div>
+        </header>
+
+        <div class="grid">
+            <main>
+                <!-- Introdução -->
+                <section id="introducao">
+                    <h2>Introdução & Estratégia</h2>
+                    <p>A implantação do ecossistema do IsaLab OS em ambiente de produção no Homelab segue a regra clássica de segurança: <strong>ocultamento de portas sob redes virtuais privadas</strong>.</p>
+                    <p>Ao invés de expor portas aleatórias do host como 3001 (Rust) ou 5173 (Vite/Node) para a sua rede local (10.0.0.x), implementou-se um túnel de comunicação interna através de uma <em>Docker Network</em> privada. Apenas o <strong>Nginx Proxy Manager (NPM)</strong> tem suas portas físicas de borda expostas para a rede local, atuando como o único ponto de entrada para o ecossistema.</p>
+                </section>
+
+                <!-- Arquitetura de Portas -->
+                <section id="arquitetura">
+                    <h2>Arquitetura de Portas & Redes</h2>
+                    <p>Os contêineres do frontend e do backend operam na rede isolada <code>proxy-network</code>. Os nomes dos serviços no Docker Compose são resolvidos pelo DNS interno do Docker, permitindo que os containers se conversem de forma transparente.</p>
+
+                    <div class="table-responsive">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Container</th>
+                                    <th>Nome de Host DNS</th>
+                                    <th>Porta Interna</th>
+                                    <th>Porta Exposta (Host)</th>
+                                    <th>Papel na Arquitetura</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><strong>Nginx Proxy Manager</strong></td>
+                                    <td><code>nginxproxymanager</code></td>
+                                    <td>80, 443, 81</td>
+                                    <td><strong>80, 443, 81</strong></td>
+                                    <td>Recebe todo o tráfego externo e distribui internamente.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Frontend (Nginx)</strong></td>
+                                    <td><code>homelab-frontend</code></td>
+                                    <td>80</td>
+                                    <td><em>Nenhuma</em></td>
+                                    <td>Serve o build estático e atua como proxy reverso local para a API.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Backend (Rust)</strong></td>
+                                    <td><code>homelab-backend</code></td>
+                                    <td>3001</td>
+                                    <td><em>Nenhuma</em></td>
+                                    <td>Processa as requisições, interage com o SQLite, Docker e Pi-hole.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="diagram">
+                        <div class="diagram-node highlight">REDE LOCAL (10.0.0.x)</div>
+                        <div class="diagram-arrow">⬇ Requisição na porta 80/443</div>
+                        <div class="diagram-node accent">Nginx Proxy Manager (Exposto)</div>
+                        <div class="diagram-arrow">⬇ Roteamento interno (proxy-network)</div>
+                        <div style="display: flex; gap: 40px;">
+                            <div class="diagram-node">homelab-frontend (Porta 80)</div>
+                            <div class="diagram-node">homelab-backend (Porta 3001)</div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Arquivos de Configuração -->
+                <section id="configuracoes">
+                    <h2>Arquivos de Configuração Criados</h2>
+                    <p>Abaixo estão os arquivos exatos configurados e utilizados para orquestrar o deploy de produção do ecossistema.</p>
+
+                    <h3>1. Docker Compose Principal</h3>
+                    <p>Localizado na raiz do projeto (<code>/app/isalab-os/docker-compose.yml</code>), este arquivo gerencia o ciclo de vida dos containers.</p>
+
+                    <div class="code-container">
+                        <div class="code-header">
+                            <div class="dots">
+                                <span class="dot red"></span>
+                                <span class="dot yellow"></span>
+                                <span class="dot green"></span>
+                            </div>
+                            <span>docker-compose.yml</span>
+                        </div>
+                        <pre><code>version: '3.8'
+
+services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: homelab-frontend:latest
+    container_name: homelab-frontend
+    networks:
+      - proxy-network
+    restart: always
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: homelab-backend-rust:latest
+    container_name: homelab-backend
+    environment:
+      - PORT=3001
+      - DATABASE_URL=sqlite:///app/data/homelab.db
+      - JWT_SECRET=isa-secret-token-key-123 # Altere para uma chave segura no deploy real
+    volumes:
+      # Persistência do Banco de Dados SQLite
+      - ./backend/data:/app/data
+      # Bind físico com as configurações do Pi-hole v6
+      - /app/big-bear-pihole/etc/pihole.toml:/etc/pihole/pihole.toml
+      # Acesso ao Docker do Host para monitorar e gerenciar outros containers em tempo real
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - proxy-network
+    restart: always
+
+networks:
+  proxy-network:
+    external: true # Usa a rede externa onde o NPM já está conectado</code></pre>
+                    </div>
+
+                    <h3>2. Configuração Nginx do Frontend (SPA + Reverse Proxy)</h3>
+                    <p>Localizado em <code>/app/isalab-os/frontend/nginx.conf</code>. Esse arquivo atua como o roteador SPA e faz o proxy reverso interno das requisições <code>/api/*</code> para o backend.</p>
+
+                    <div class="code-container">
+                        <div class="code-header">
+                            <div class="dots">
+                                <span class="dot red"></span>
+                                <span class="dot yellow"></span>
+                                <span class="dot green"></span>
+                            </div>
+                            <span>nginx.conf</span>
+                        </div>
+                        <pre><code>server {
+    listen 80;
+    server_name localhost;
+
+    location / {
+        root /usr/share/nginx/html;
+        index index.html index.htm;
+        try_files $uri $uri/ /index.html;
+    }
+
+    # Proxy para o backend Rust
+    location /api/ {
+        proxy_pass http://homelab-backend:3001/api/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+
+        # Configurações de timeout para operações longas (ex: pipelines)
+        proxy_connect_timeout 300s;
+        proxy_send_timeout 300s;
+        proxy_read_timeout 300s;
+    }
+}</code></pre>
+                    </div>
+
+                    <h3>3. Dockerfile Multiestágio do Backend Rust</h3>
+                    <p>Localizado em <code>/app/isalab-os/backend/Dockerfile</code>. Compila o executável da API no Rust 1.96 e gera uma imagem final otimizada baseada no Debian Trixie.</p>
+
+                    <div class="code-container">
+                        <div class="code-header">
+                            <div class="dots">
+                                <span class="dot red"></span>
+                                <span class="dot yellow"></span>
+                                <span class="dot green"></span>
+                            </div>
+                            <span>Dockerfile</span>
+                        </div>
+                        <pre><code># Stage 1: Build
+FROM rust:1.96-slim AS builder
+WORKDIR /app
+RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+COPY Cargo.toml Cargo.lock ./
+COPY migrations ./migrations
+COPY src ./src
+RUN cargo build --release
+
+# Stage 2: Runtime
+FROM debian:trixie-slim AS runtime
+WORKDIR /app
+RUN apt-get update && apt-get install -y ca-certificates libssl3 sqlite3 && rm -rf /var/lib/apt/lists/*
+# Copiar a CLI do Docker para permitir gerenciamento de containers a partir do socket
+COPY --from=docker:latest /usr/local/bin/docker /usr/local/bin/docker
+COPY --from=builder /app/target/release/homelab-governance-api /app/homelab-governance-api
+COPY migrations /app/migrations
+ENV PORT=3001
+ENV DATABASE_URL=sqlite:///app/data/homelab.db
+EXPOSE 3001
+CMD ["/app/homelab-governance-api"]</code></pre>
+                    </div>
+                </section>
+
+                <!-- Resolução de Problemas & Lições Aprendidas -->
+                <section id="troubleshooting">
+                    <h2>Resolução de Problemas (Troubleshooting)</h2>
+                    <p>Durante a migração para a infraestrutura de produção em Docker, identificamos e contornamos dois obstáculos significativos:</p>
+
+                    <div class="callout warning">
+                        <h5>1. Incompatibilidade com GLIBC 2.39 no Debian</h5>
+                        <p>O compilador do <strong>Rust 1.96</strong> gerou um binário dinamicamente linkado que requeria a biblioteca <strong>GLIBC 2.39</strong> (induzido por crates que exigem a Edition 2024 como a dependência transitiva <code>time</code>). A imagem base de execução original, <code>debian:bookworm-slim</code>, contava apenas com a versão GLIBC 2.36, gerando erros de execução imediatamente.</p>
+                        <p><strong>Solução:</strong> Atualizamos o estágio final de runtime no Dockerfile para utilizar <strong><code>debian:trixie-slim</code></strong> (a versão testing do Debian), que fornece nativamente suporte a GLIBC 2.39+.</p>
+                    </div>
+
+                    <div class="callout success">
+                        <h5>2. Caminhos de Bancos de Dados SQLite</h5>
+                        <p>A API tentava tratar o caminho da URL de banco SQLite removendo barras iniciais (<code>trim_start_matches('/')</code>). Com isso, a URL de banco absoluto no container (<code>sqlite:///app/data/homelab.db</code>) era convertida em <code>app/data/homelab.db</code>, fazendo com que o Rust tentasse criar e abrir o arquivo sob o subdiretório relativo <code>/app/app/data/...</code>, o que resultava no erro <em>(code: 14) unable to open database file</em>.</p>
+                        <p><strong>Solução:</strong> Refatoramos a lógica de inicialização de <code>main.rs</code> para verificar se a URL é absoluta (prefixo <code>sqlite:///</code>) e manter a barra inicial no caminho resultante do arquivo.</p>
+                    </div>
+
+                    <div class="callout info">
+                        <h5>3. Monitoramento em Tempo Real do Host</h5>
+                        <p>Como a API roda dentro de um container isolado, os comandos <code>docker ps</code> falhavam por padrão. Nós solucionamos isso instalando a CLI do Docker no estágio de runtime e efetuando a montagem física do soquete <code>/var/run/docker.sock:/var/run/docker.sock</code> no Docker Compose. Com isso, a listagem dos contêineres reais do Homelab voltou a operar em tempo real.</p>
+                    </div>
+
+                    <div class="callout success">
+                        <h5>4. Telemetria Real de Hardware (Sem Dados Mockados)</h5>
+                        <p>Substituímos toda a simulação estática de métricas por telemetria ativa. O backend lê diretamente os arquivos virtuais do kernel do host montados no container (<code>/proc/stat</code> para CPU, <code>/proc/meminfo</code> para RAM, <code>/proc/uptime</code> para Uptime e <code>/proc/net/dev</code> para tráfego de rede) e executa o utilitário <code>df</code> para medir o espaço de disco real do host, fornecendo dados dinâmicos do Homelab.</p>
+                    </div>
+
+                    <div class="callout info">
+                        <h5>5. Automações de Implantação Dinâmicas (Pipelines Reais)</h5>
+                        <p>Substituímos credenciais estáticas de e-mail e mocks de criação do Docker. O pipeline lê dinamicamente as credenciais de e-mail e senha do NPM configuradas no onboarding e dispara comandos reais de criação de contêineres (<code>docker run</code>) via socket, associando os novos contêineres diretamente à rede privada do Homelab.</p>
+                    </div>
+                </section>
+
+                <!-- Comandos Úteis -->
+                <section id="comandos">
+                    <h2>Comandos de Operação Úteis</h2>
+                    <p>Aqui estão os comandos necessários para interagir com a infraestrutura no dia a dia:</p>
+
+                    <h3>Inicializar e Reconstruir</h3>
+                    <div class="code-container">
+                        <div class="code-header"><span>Terminal</span></div>
+                        <pre><code># Subir os containers em background forçando a reconstrução
+docker compose up -d --build
+
+# Parar os containers sem apagar os volumes
+docker compose down</code></pre>
+                    </div>
+
+                    <h3>Monitorar Logs do Backend</h3>
+                    <div class="code-container">
+                        <div class="code-header"><span>Terminal</span></div>
+                        <pre><code># Acompanhar logs da API do backend em tempo real
+docker logs -f homelab-backend</code></pre>
+                    </div>
+
+                    <h3>Criar Rede Manual e Conectar o NPM (Passo inicial feito)</h3>
+                    <div class="code-container">
+                        <div class="code-header"><span>Terminal</span></div>
+                        <pre><code># Criar a rede compartilhada
+docker network create proxy-network
+
+# Conectar o container do Nginx Proxy Manager à rede criada
+docker network connect proxy-network nginxproxymanager</code></pre>
+                    </div>
+                </section>
+            </main>
+
+            <!-- Sidebar -->
+            <aside>
+                <div class="nav-card">
+                    <h4>Navegação</h4>
+                    <ul class="nav-list">
+                        <li><a href="#introducao">🚀 Introdução</a></li>
+                        <li><a href="#arquitetura">🗺️ Redes & Portas</a></li>
+                        <li><a href="#configuracoes">📁 Arquivos de Config</a></li>
+                        <li><a href="#troubleshooting">🛠️ Troubleshooting</a></li>
+                        <li><a href="#comandos">💻 Comandos Úteis</a></li>
+                    </ul>
+                </div>
+            </aside>
+        </div>
+
+        <footer>
+            <p>Desenvolvido e mantido para o ecossistema <strong>IsaLab OS</strong> &copy; 2026.</p>
+        </footer>
+    </div>
+</body>
+</html>
